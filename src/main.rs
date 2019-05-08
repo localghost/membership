@@ -2,6 +2,8 @@ use mio::*;
 use mio::net::*;
 use std::io::Write;
 use structopt::StructOpt;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 #[derive(StructOpt, Default)]
 struct Config {
@@ -12,8 +14,8 @@ struct Config {
 #[derive(Default)]
 struct Gossip {
     config: Config,
-    client: Option<TcpStream>,
-    server: Option<TcpListener>,
+    client: Option<UdpSocket>,
+    server: Option<UdpSocket>,
 }
 
 impl Gossip {
@@ -21,32 +23,42 @@ impl Gossip {
         Gossip{config: config, ..Default::default()}
     }
 
-    fn connect(&mut self) {
-        let addr = format!("127.0.0.1:{}", self.config.port).parse().unwrap();
+    fn join(&mut self, _member: IpAddr) {
+//        let addr = format!("127.0.0.1:{}", self.config.port).parse().unwrap();
         let poll = Poll::new().unwrap();
-        self.server = Some(TcpListener::bind(&addr).unwrap());
-        poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
-        self.client = Some(TcpStream::connect(&addr).unwrap());
-        poll.register(self.client.as_ref().unwrap(), Token(42), Ready::writable(), PollOpt::edge()).unwrap();
+
+        self.bind(&poll);
+
         let mut events = Events::with_capacity(1024);
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
                 match event.token() {
-                    Token(42) => {
-                        self.client.as_mut().unwrap().write(b"dfdsfsd").unwrap();
-                    }
+//                    Token(42) => {
+//                        self.client.as_mut().unwrap().write(b"dfdsfsd").unwrap();
+//                    }
                     Token(43) => {
-                        self.server.as_ref().unwrap().accept();
+//                        self.server.as_ref().unwrap().accept();
+//                        event.
                     }
                     _ => unreachable!()
                 }
             }
         }
     }
+
+    fn bind(&mut self, poll: &Poll) {
+        self.server = Some(UdpSocket::bind(&format!("127.0.0.1:{}", self.config.port).parse().unwrap()).unwrap());
+        poll.register(self.server.as_ref().unwrap(), Token(43), Ready::all(), PollOpt::edge()).unwrap();
+    }
+
+//    fn ping(&mut self, poll: &Poll) {
+//        self.client = Some(TcpStream::connect(&addr).unwrap());
+//        poll.register(self.client.as_ref().unwrap(), Token(42), Ready::writable(), PollOpt::edge()).unwrap();
+//    }
 }
 
 fn main() {
     let config = Config::from_args();
-    Gossip::new(config).connect();
+    Gossip::new(config).join(IpAddr::from_str("127.0.0.1").unwrap());
 }
