@@ -8,7 +8,10 @@ use std::str::FromStr;
 #[derive(StructOpt, Default)]
 struct Config {
     #[structopt(short="p", long="port", default_value="2345")]
-    port: i32
+    port: i32,
+
+    #[structopt(short="b", long="bind-address", default_value="127.0.0.1")]
+    bind_address: String
 }
 
 #[derive(Default)]
@@ -33,23 +36,33 @@ impl Gossip {
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
-                match event.token() {
+                if event.readiness().is_readable() {
+                    if let Token(43) = event.token() {
+                        let mut buf = [0; 1024];
+                        let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
+                        println!("{:?}", String::from_utf8_lossy(&buf));
+                        //                    self.server.as_ref().unwrap().re
+                        //                    assert!()
+                    }
+                }
+//                match event.token() {
 //                    Token(42) => {
 //                        self.client.as_mut().unwrap().write(b"dfdsfsd").unwrap();
 //                    }
-                    Token(43) => {
+//                    Token(43) => {
+//                        self.server.as_ref().unwrap()
 //                        self.server.as_ref().unwrap().accept();
 //                        event.
-                    }
-                    _ => unreachable!()
+//                    }
+//                    _ => unreachable!()
                 }
             }
         }
-    }
 
     fn bind(&mut self, poll: &Poll) {
-        self.server = Some(UdpSocket::bind(&format!("127.0.0.1:{}", self.config.port).parse().unwrap()).unwrap());
-        poll.register(self.server.as_ref().unwrap(), Token(43), Ready::all(), PollOpt::edge()).unwrap();
+        let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
+        self.server = Some(UdpSocket::bind(&address).unwrap());
+        poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
     }
 
 //    fn ping(&mut self, poll: &Poll) {
