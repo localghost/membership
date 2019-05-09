@@ -1,9 +1,11 @@
 use mio::*;
 use mio::net::*;
+use mio_extras::timer::*;
 use std::io::Write;
 use structopt::StructOpt;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::time::Duration;
 
 #[derive(StructOpt, Default)]
 struct Config {
@@ -19,6 +21,7 @@ struct Gossip {
     config: Config,
     client: Option<UdpSocket>,
     server: Option<UdpSocket>,
+    members: Vec<IpAddr>
 }
 
 impl Gossip {
@@ -27,34 +30,40 @@ impl Gossip {
     }
 
     fn join(&mut self, _member: IpAddr) {
+        self.members.push(_member);
 //        let addr = format!("127.0.0.1:{}", self.config.port).parse().unwrap();
         let poll = Poll::new().unwrap();
+        let mut timer = Builder::default().build::<()>();
+        timer.set_timeout(Duration::from_secs(5), ());
+        poll.register(&timer, Token(11), Ready::readable(), PollOpt::edge());
 
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
+        let mut buffer: Vec<IpAddr>;
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
+                println!("{:?}", event);
                 if event.readiness().is_readable() {
-                    if let Token(43) = event.token() {
-                        let mut buf = [0; 1024];
-                        let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
-                        println!("{:?}", String::from_utf8_lossy(&buf));
-                        //                    self.server.as_ref().unwrap().re
-                        //                    assert!()
+                    match event.token() {
+                        Token(43) => {
+                            let mut buf = [0; 1024];
+                            let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
+                            println!("{:?}", String::from_utf8_lossy(&buf));
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                        }
+                        Token(11) => {
+                            buffer = self.members.iter().take(3).collect();
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                            timer.set_timeout(Duration::from_secs(5), ());
+                        }
+                        _ => unreachable!()
                     }
-                }
-//                match event.token() {
-//                    Token(42) => {
-//                        self.client.as_mut().unwrap().write(b"dfdsfsd").unwrap();
-//                    }
-//                    Token(43) => {
-//                        self.server.as_ref().unwrap()
-//                        self.server.as_ref().unwrap().accept();
-//                        event.
-//                    }
-//                    _ => unreachable!()
+                } else if event.readiness().is_writable() {
+//                    self.server.as_ref().unwrap().send_to()
+                    self.server.as_ref().unwrap().send_to(b"ala ma kota", &SocketAddr::from_str("127.0.0.1:9876").unwrap());
+                    poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                 }
             }
         }
