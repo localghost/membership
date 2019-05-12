@@ -6,14 +6,21 @@ use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
+use bytes;
 
 #[derive(StructOpt, Default)]
 struct Config {
     #[structopt(short="p", long="port", default_value="2345")]
-    port: i32,
+    port: u16,
 
     #[structopt(short="b", long="bind-address", default_value="127.0.0.1")]
-    bind_address: String
+    bind_address: String,
+
+    #[structopt(short="p", long="proto-period", default_value="5")]
+    protocol_period: u64,
+
+    #[structopt(short="a", long="ack-timeout", default_value="1")]
+    ack_timeout: u8,
 }
 
 #[derive(Default)]
@@ -21,22 +28,27 @@ struct Gossip {
     config: Config,
     client: Option<UdpSocket>,
     server: Option<UdpSocket>,
-    members: Vec<IpAddr>
+    timer: Timer<()>,
+    members: Vec<IpAddr>,
+    next_member_index: usize,
+    epoch: usize,
 }
 
 impl Gossip {
     fn new(config: Config) -> Gossip {
-        Gossip{config: config, ..Default::default()}
+        Gossip{
+            config: config,
+            timer: Builder::default().build::<()>(),
+            ..Default::default()
+        }
     }
 
     fn join(&mut self, _member: IpAddr) {
         self.members.push(_member);
 //        let addr = format!("127.0.0.1:{}", self.config.port).parse().unwrap();
         let poll = Poll::new().unwrap();
-        let mut timer = Builder::default().build::<()>();
-        timer.set_timeout(Duration::from_secs(5), ());
-        poll.register(&timer, Token(11), Ready::readable(), PollOpt::edge());
-
+        poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
+        self.reset_protocol_timer();
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
@@ -56,22 +68,30 @@ impl Gossip {
                         Token(11) => {
                             buffer = self.members.iter().take(3).collect();
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
-                            timer.set_timeout(Duration::from_secs(5), ());
+                            self.reset_protocol_timer()
                         }
                         _ => unreachable!()
                     }
                 } else if event.readiness().is_writable() {
 //                    self.server.as_ref().unwrap().send_to()
-                    self.server.as_ref().unwrap().send_to(b"ala ma kota", &SocketAddr::from_str("127.0.0.1:9876").unwrap());
+                    let mut message = bytes::BytesMut::with_capacity(1024);
+                    message.put_slice(b"PING");
+                    message.put(self.epoch);
+                    self.server.as_ref().unwrap().send_to(&message.take(), &SocketAddr::new(self.members[self.next_member_index].close(), self.config.port));
                     poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                 }
             }
         }
+    }
 
     fn bind(&mut self, poll: &Poll) {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
         self.server = Some(UdpSocket::bind(&address).unwrap());
         poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
+    }
+
+    fn reset_protocol_timer(&self) {
+        self.timer.set_timeout(Duration::from_secs(self.config.protocol_period), ());
     }
 
 //    fn ping(&mut self, poll: &Poll) {
