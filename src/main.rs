@@ -7,35 +7,45 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 use bytes;
+use bytes::BufMut;
 
 #[derive(StructOpt, Default)]
-struct Config {
+struct ProtocolConfig {
     #[structopt(short="p", long="port", default_value="2345")]
     port: u16,
 
     #[structopt(short="b", long="bind-address", default_value="127.0.0.1")]
     bind_address: String,
 
-    #[structopt(short="p", long="proto-period", default_value="5")]
+    #[structopt(short="o", long="proto-period", default_value="5")]
     protocol_period: u64,
 
     #[structopt(short="a", long="ack-timeout", default_value="1")]
     ack_timeout: u8,
 }
 
+#[derive(StructOpt, Default)]
+struct Config {
+    #[structopt(short="j", long="join-address", default_value="127.0.0.1")]
+    join_address: String,
+
+    #[structopt(flatten)]
+    proto_config: ProtocolConfig,
+}
+
 #[derive(Default)]
 struct Gossip {
-    config: Config,
+    config: ProtocolConfig,
     client: Option<UdpSocket>,
     server: Option<UdpSocket>,
     timer: Timer<()>,
     members: Vec<IpAddr>,
     next_member_index: usize,
-    epoch: usize,
+    epoch: u64,
 }
 
 impl Gossip {
-    fn new(config: Config) -> Gossip {
+    fn new(config: ProtocolConfig) -> Gossip {
         Gossip{
             config: config,
             timer: Builder::default().build::<()>(),
@@ -60,13 +70,12 @@ impl Gossip {
                 if event.readiness().is_readable() {
                     match event.token() {
                         Token(43) => {
-                            let mut buf = [0; 1024];
+                            let mut buf = [0; 32];
                             let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
-                            println!("{:?}", String::from_utf8_lossy(&buf));
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                            println!("From {}: {:?}", sender.to_string(), String::from_utf8_lossy(&buf));
                         }
                         Token(11) => {
-                            buffer = self.members.iter().take(3).collect();
+//                            buffer = self.members.iter().take(3).collect();
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                             self.reset_protocol_timer()
                         }
@@ -74,11 +83,13 @@ impl Gossip {
                     }
                 } else if event.readiness().is_writable() {
 //                    self.server.as_ref().unwrap().send_to()
-                    let mut message = bytes::BytesMut::with_capacity(1024);
+                    let mut message = bytes::BytesMut::with_capacity(32);
                     message.put_slice(b"PING");
-                    message.put(self.epoch);
-                    self.server.as_ref().unwrap().send_to(&message.take(), &SocketAddr::new(self.members[self.next_member_index].close(), self.config.port));
+                    message.put_u64_be(self.epoch);
+                    let result = self.server.as_ref().unwrap().send_to(&message.take(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
+                    println!("SEND RESULT: {:?}", result);
                     poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
+                    self.epoch += 1
                 }
             }
         }
@@ -90,7 +101,7 @@ impl Gossip {
         poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
     }
 
-    fn reset_protocol_timer(&self) {
+    fn reset_protocol_timer(&mut self) {
         self.timer.set_timeout(Duration::from_secs(self.config.protocol_period), ());
     }
 
@@ -102,5 +113,6 @@ impl Gossip {
 
 fn main() {
     let config = Config::from_args();
-    Gossip::new(config).join(IpAddr::from_str("127.0.0.1").unwrap());
+//    let proto_config = ProtocolConfig::from_args();
+    Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
 }
