@@ -7,7 +7,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 use bytes;
-use bytes::BufMut;
+use bytes::{BufMut, Buf};
+use std::io::Cursor;
 
 #[derive(StructOpt, Default)]
 struct ProtocolConfig {
@@ -44,6 +45,27 @@ struct Gossip {
     epoch: u64,
 }
 
+enum MessageType {
+    PING,
+    PING_ACK,
+}
+
+struct Message {
+    buffer: bytes::BytesMut
+}
+
+impl Message {
+    fn create(message_type: MessageType) -> Self {
+        let mut message = Message{ buffer: bytes::BytesMut::with_capacity(32) };
+        message.buffer.put_i32_be(message_type as i32);
+        message
+    }
+
+    fn into_inner(self) -> bytes::Bytes {
+        return self.buffer;
+    }
+}
+
 impl Gossip {
     fn new(config: ProtocolConfig) -> Gossip {
         Gossip{
@@ -72,7 +94,8 @@ impl Gossip {
                         Token(43) => {
                             let mut buf = [0; 32];
                             let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
-                            println!("From {}: {:?}", sender.to_string(), String::from_utf8_lossy(&buf));
+                            let mut message = Cursor::new(buf);
+                            println!("From {}: {:?} -> {}", sender.to_string(), message.get_i32_be(), message.get_u64_be());
                         }
                         Token(11) => {
 //                            buffer = self.members.iter().take(3).collect();
@@ -84,7 +107,7 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
 //                    self.server.as_ref().unwrap().send_to()
                     let mut message = bytes::BytesMut::with_capacity(32);
-                    message.put_slice(b"PING");
+                    message.put_i32_be(MessageType::PING as i32);
                     message.put_u64_be(self.epoch);
                     let result = self.server.as_ref().unwrap().send_to(&message.take(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
                     println!("SEND RESULT: {:?}", result);
