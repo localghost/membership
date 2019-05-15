@@ -6,8 +6,7 @@ use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
-use bytes;
-use bytes::{BufMut, Buf};
+use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
 
 #[derive(StructOpt, Default)]
@@ -51,18 +50,41 @@ enum MessageType {
 }
 
 struct Message {
-    buffer: bytes::BytesMut
+    buffer: BytesMut
 }
 
 impl Message {
-    fn create(message_type: MessageType) -> Self {
-        let mut message = Message{ buffer: bytes::BytesMut::with_capacity(32) };
+    fn create(message_type: MessageType, sequence_number: u64, epoch: u64) -> Self {
+        let mut message = Message{ buffer: BytesMut::with_capacity(32) };
         message.buffer.put_i32_be(message_type as i32);
+        message.buffer.put_u64_be(sequence_number);
+        message.buffer.put_u64_be(epoch);
         message
     }
 
-    fn into_inner(self) -> bytes::Bytes {
-        return self.buffer;
+    fn get_type(&self) -> MessageType {
+        let encoded_type = Cursor::new(&self.buffer).get_i32_be();
+        match encoded_type {
+            x if x == MessageType::PING as i32 => {
+                MessageType::PING
+            },
+            x if x == MessageType::PING_ACK as i32 => {
+                MessageType::PING_ACK
+            },
+            _ => {
+                panic!("No such message type")
+            }
+        }
+    }
+
+    fn into_inner(self) -> BytesMut {
+        self.buffer
+    }
+}
+
+impl From<&[u8]> for Message {
+    fn from(src: &[u8]) -> Self {
+        Message{ buffer: bytes::BytesMut::from(src) }
     }
 }
 
@@ -85,6 +107,7 @@ impl Gossip {
 
         let mut events = Events::with_capacity(1024);
         let mut buffer: Vec<IpAddr>;
+        let mut sequence_number: u64 = 0;
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
@@ -100,19 +123,17 @@ impl Gossip {
                         Token(11) => {
 //                            buffer = self.members.iter().take(3).collect();
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                            self.epoch += 1;
                             self.reset_protocol_timer()
                         }
                         _ => unreachable!()
                     }
                 } else if event.readiness().is_writable() {
-//                    self.server.as_ref().unwrap().send_to()
-                    let mut message = bytes::BytesMut::with_capacity(32);
-                    message.put_i32_be(MessageType::PING as i32);
-                    message.put_u64_be(self.epoch);
-                    let result = self.server.as_ref().unwrap().send_to(&message.take(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
+                    let message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                    let result = self.server.as_ref().unwrap().send_to(&message.into_inner(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
                     println!("SEND RESULT: {:?}", result);
                     poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
-                    self.epoch += 1
+                    sequence_number += 1;
                 }
             }
         }
