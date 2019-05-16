@@ -44,6 +44,7 @@ struct Gossip {
     epoch: u64,
 }
 
+#[derive(Debug)]
 enum MessageType {
     PING,
     PING_ACK,
@@ -63,7 +64,7 @@ impl Message {
     }
 
     fn get_type(&self) -> MessageType {
-        let encoded_type = Cursor::new(&self.buffer).get_i32_be();
+        let encoded_type = self.get_cursor_into_buffer(0).get_i32_be();
         match encoded_type {
             x if x == MessageType::PING as i32 => {
                 MessageType::PING
@@ -77,14 +78,31 @@ impl Message {
         }
     }
 
+    fn get_sequence_number(&self) -> u64 {
+        self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64).get_u64_be()
+
+    }
+
+    fn get_epoch(&self) -> u64 {
+        self.get_cursor_into_buffer(
+            (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64
+        ).get_u64_be()
+    }
+
     fn into_inner(self) -> BytesMut {
         self.buffer
     }
+
+    fn get_cursor_into_buffer(&self, position: u64) -> Cursor<&BytesMut> {
+        let mut cursor = Cursor::new(&self.buffer);
+        cursor.set_position(position);
+        cursor
+    }
 }
 
-impl From<&[u8]> for Message {
-    fn from(src: &[u8]) -> Self {
-        Message{ buffer: bytes::BytesMut::from(src) }
+impl<T: AsRef<[u8]>> From<T> for Message {
+    fn from(src: T) -> Self {
+        Message{ buffer: bytes::BytesMut::from(src.as_ref()) }
     }
 }
 
@@ -117,8 +135,10 @@ impl Gossip {
                         Token(43) => {
                             let mut buf = [0; 32];
                             let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
-                            let mut message = Cursor::new(buf);
-                            println!("From {}: {:?} -> {}", sender.to_string(), message.get_i32_be(), message.get_u64_be());
+                            let message = Message::from(&buf);
+//                            let mut message = Cursor::new(buf);
+                            println!("From {}: {:?} -> {}", sender.to_string(), message.get_type(), message.get_sequence_number());
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(11) => {
 //                            buffer = self.members.iter().take(3).collect();
