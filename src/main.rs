@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
+use std::collections::vec_deque::VecDeque;
 
 #[derive(StructOpt, Default)]
 struct ProtocolConfig {
@@ -106,6 +107,11 @@ impl<T: AsRef<[u8]>> From<T> for Message {
     }
 }
 
+struct Letter {
+    sender: SocketAddr,
+    message: Message,
+}
+
 impl Gossip {
     fn new(config: ProtocolConfig) -> Gossip {
         Gossip{
@@ -117,7 +123,6 @@ impl Gossip {
 
     fn join(&mut self, _member: IpAddr) {
         self.members.push(_member);
-//        let addr = format!("127.0.0.1:{}", self.config.port).parse().unwrap();
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
         self.reset_protocol_timer();
@@ -126,6 +131,7 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut buffer: Vec<IpAddr>;
         let mut sequence_number: u64 = 0;
+        let mut pings_to_confirm = VecDeque::with_capacity(1024);
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
@@ -136,9 +142,18 @@ impl Gossip {
                             let mut buf = [0; 32];
                             let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
                             let message = Message::from(&buf);
-//                            let mut message = Cursor::new(buf);
                             println!("From {}: {:?} -> {}", sender.to_string(), message.get_type(), message.get_sequence_number());
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                            match message.get_type() {
+                                MessageType::PING => {
+                                    pings_to_confirm.push_back(Letter { sender, message });
+                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                                }
+                                MessageType::PING_ACK => {
+
+                                }
+                                _ => unreachable!()
+                            }
+//                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(11) => {
 //                            buffer = self.members.iter().take(3).collect();
@@ -149,11 +164,22 @@ impl Gossip {
                         _ => unreachable!()
                     }
                 } else if event.readiness().is_writable() {
-                    let message = Message::create(MessageType::PING, sequence_number, self.epoch);
-                    let result = self.server.as_ref().unwrap().send_to(&message.into_inner(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
-                    println!("SEND RESULT: {:?}", result);
-                    poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
-                    sequence_number += 1;
+                    match event.token() {
+                        Token(53) => {
+                            let confirm = pings_to_confirm.pop_front().unwrap();
+                            let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                            self.send_letter(Letter{message, sender: confirm.sender});
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
+                        }
+                        Token(43) => {
+                            let message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                            let result = self.server.as_ref().unwrap().send_to(&message.into_inner(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
+                            println!("SEND RESULT: {:?}", result);
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
+                            sequence_number += 1;
+                        }
+                        _ => unreachable!()
+                    }
                 }
             }
         }
@@ -167,6 +193,10 @@ impl Gossip {
 
     fn reset_protocol_timer(&mut self) {
         self.timer.set_timeout(Duration::from_secs(self.config.protocol_period), ());
+    }
+
+    fn send_letter(&mut self, letter: Letter) {
+        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.sender);
     }
 
 //    fn ping(&mut self, poll: &Poll) {
