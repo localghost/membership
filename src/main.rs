@@ -9,6 +9,7 @@ use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
+use std::collections::HashMap;
 
 #[derive(StructOpt, Default)]
 struct ProtocolConfig {
@@ -132,6 +133,7 @@ impl Gossip {
         let mut buffer: Vec<IpAddr>;
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
+        let mut wait_ack = HashMap::new();
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
@@ -146,17 +148,23 @@ impl Gossip {
                             match message.get_type() {
                                 MessageType::PING => {
                                     pings_to_confirm.push_back(Letter { sender, message });
+                                    // TODO: register the member that pinged this one as one of the members
+                                    self.members.push(sender.ip()); // FIXME: check the member is not already registered
+                                    // FIXME: this could overwrite the write from time timeout on epoch change
+                                    // - a single queue of messages to be sent (not rely on tokens?)
+                                    // - remember the previous registration?
+                                    // - remember the interest and reset it back when handling PING_ACK sending (see HERE)
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                                 }
                                 MessageType::PING_ACK => {
-
+                                    // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
+                                    // and removed from the cluster
+                                    wait_ack.remove(&message.get_sequence_number());
                                 }
                                 _ => unreachable!()
                             }
-//                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(11) => {
-//                            buffer = self.members.iter().take(3).collect();
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                             self.epoch += 1;
                             self.reset_protocol_timer()
@@ -169,14 +177,17 @@ impl Gossip {
                             let confirm = pings_to_confirm.pop_front().unwrap();
                             let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                             self.send_letter(Letter{message, sender: confirm.sender});
+                            // HERE
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(43) => {
                             let message = Message::create(MessageType::PING, sequence_number, self.epoch);
-                            let result = self.server.as_ref().unwrap().send_to(&message.into_inner(), &SocketAddr::new(self.members[self.next_member_index], self.config.port));
+                            let result = self.send_letter(Letter{message, sender: SocketAddr::new(self.members[self.next_member_index], self.config.port)});
+                            wait_ack.insert(sequence_number, self.members[self.next_member_index]);
                             println!("SEND RESULT: {:?}", result);
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                             sequence_number += 1;
+                            self.next_member_index += 1 % self.members.len();
                         }
                         _ => unreachable!()
                     }
