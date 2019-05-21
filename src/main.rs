@@ -48,6 +48,7 @@ struct Gossip {
     members_presence: HashSet<IpAddr>,
     next_member_index: usize,
     epoch: u64,
+    recv_buffer: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -121,9 +122,26 @@ impl fmt::Debug for Message {
     }
 }
 
-struct Letter {
+struct OutgoingLetter {
+    target: SocketAddr,
+    message: Message,
+}
+
+impl fmt::Debug for OutgoingLetter {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OutgoingLetter {{ target: {}, message: {:?} }}", self.target, self.message)
+    }
+}
+
+struct IncomingLetter {
     sender: SocketAddr,
     message: Message,
+}
+
+impl fmt::Debug for IncomingLetter {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "IncomingLetter {{ sender: {}, message: {:?} }}", self.sender, self.message)
+    }
 }
 
 impl Gossip {
@@ -131,6 +149,7 @@ impl Gossip {
         Gossip{
             config: config,
             timer: Builder::default().build::<()>(),
+            recv_buffer: [0; 32],
             ..Default::default()
         }
     }
@@ -151,20 +170,18 @@ impl Gossip {
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
-                debug!("Event: {:?}", event);
+                debug!("{:?}", event);
                 if event.readiness().is_readable() {
                     match event.token() {
                         Token(43) => {
-                            let mut buf = [0; 32];
-                            let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
-                            let message = Message::from(&buf);
-                            debug!("{} -> {:?}", sender.to_string(), message);
-                            match message.get_type() {
+                            let letter = self.recv_letter();
+                            debug!("{:?}", letter);
+                            match letter.message.get_type() {
                                 MessageType::PING => {
-                                    pings_to_confirm.push_back(Letter { sender, message });
-                                    if self.members_presence.insert(sender.ip()) {
-                                        self.members.push(sender.ip());
+                                    if self.members_presence.insert(letter.sender.ip()) {
+                                        self.members.push(letter.sender.ip());
                                     }
+                                    pings_to_confirm.push_back(letter);
                                     // FIXME: this could overwrite the write from time timeout on epoch change
                                     // - a single queue of messages to be sent (not rely on tokens?)
                                     // - remember the previous registration?
@@ -174,14 +191,14 @@ impl Gossip {
                                 MessageType::PING_ACK => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
-                                    wait_ack.remove(&message.get_sequence_number());
+                                    wait_ack.remove(&letter.message.get_sequence_number());
                                 }
                                 _ => unreachable!()
                             }
                         }
                         Token(11) => {
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                             self.epoch += 1;
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
                             self.reset_protocol_timer()
                         }
                         _ => unreachable!()
@@ -191,15 +208,17 @@ impl Gossip {
                         Token(53) => {
                             let confirm = pings_to_confirm.pop_front().unwrap();
                             let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
-                            debug!("{:?} -> {}", message, confirm.sender);
-                            self.send_letter(Letter{message, sender: confirm.sender});
+                            let letter = OutgoingLetter{message, target: confirm.sender};
+                            debug!("{:?}", letter);
+                            self.send_letter(letter);
                             // HERE
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(43) => {
                             let message = Message::create(MessageType::PING, sequence_number, self.epoch);
-                            debug!("{:?} -> {}", message, self.members[self.next_member_index].to_string());
-                            let result = self.send_letter(Letter{message, sender: SocketAddr::new(self.members[self.next_member_index], self.config.port)});
+                            let letter = OutgoingLetter{message, target: SocketAddr::new(self.members[self.next_member_index], self.config.port)};
+                            debug!("{:?}", letter);
+                            let result = self.send_letter(letter);
                             wait_ack.insert(sequence_number, self.members[self.next_member_index]);
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                             sequence_number += 1;
@@ -222,8 +241,13 @@ impl Gossip {
         self.timer.set_timeout(Duration::from_secs(self.config.protocol_period), ());
     }
 
-    fn send_letter(&mut self, letter: Letter) {
-        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.sender);
+    fn send_letter(&mut self, letter: OutgoingLetter) {
+        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target);
+    }
+
+    fn recv_letter(&mut self) -> IncomingLetter {
+        let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
+        IncomingLetter{sender, message: Message::from(self.recv_buffer)}
     }
 
 //    fn ping(&mut self, poll: &Poll) {
