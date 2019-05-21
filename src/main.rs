@@ -9,7 +9,10 @@ use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use log::{debug};
+use env_logger;
 
 #[derive(StructOpt, Default)]
 struct ProtocolConfig {
@@ -42,6 +45,7 @@ struct Gossip {
     server: Option<UdpSocket>,
     timer: Timer<()>,
     members: Vec<IpAddr>,
+    members_presence: HashSet<IpAddr>,
     next_member_index: usize,
     epoch: u64,
 }
@@ -108,6 +112,15 @@ impl<T: AsRef<[u8]>> From<T> for Message {
     }
 }
 
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+               "Message {{ type: {:?}, epoch: {}, sequence_number: {} }}",
+               self.get_type(), self.get_epoch(), self.get_sequence_number()
+        )
+    }
+}
+
 struct Letter {
     sender: SocketAddr,
     message: Message,
@@ -124,6 +137,7 @@ impl Gossip {
 
     fn join(&mut self, _member: IpAddr) {
         self.members.push(_member);
+        self.members_presence.insert(_member);
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
         self.reset_protocol_timer();
@@ -137,24 +151,25 @@ impl Gossip {
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
-                println!("{:?}", event);
+                debug!("Event: {:?}", event);
                 if event.readiness().is_readable() {
                     match event.token() {
                         Token(43) => {
                             let mut buf = [0; 32];
                             let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut buf).unwrap();
                             let message = Message::from(&buf);
-                            println!("From {}: {:?} -> {}", sender.to_string(), message.get_type(), message.get_sequence_number());
+                            debug!("{} -> {:?}", sender.to_string(), message);
                             match message.get_type() {
                                 MessageType::PING => {
                                     pings_to_confirm.push_back(Letter { sender, message });
-                                    // TODO: register the member that pinged this one as one of the members
-                                    self.members.push(sender.ip()); // FIXME: check the member is not already registered
+                                    if self.members_presence.insert(sender.ip()) {
+                                        self.members.push(sender.ip());
+                                    }
                                     // FIXME: this could overwrite the write from time timeout on epoch change
                                     // - a single queue of messages to be sent (not rely on tokens?)
                                     // - remember the previous registration?
                                     // - remember the interest and reset it back when handling PING_ACK sending (see HERE)
-                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 MessageType::PING_ACK => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
@@ -176,18 +191,19 @@ impl Gossip {
                         Token(53) => {
                             let confirm = pings_to_confirm.pop_front().unwrap();
                             let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                            debug!("{:?} -> {}", message, confirm.sender);
                             self.send_letter(Letter{message, sender: confirm.sender});
                             // HERE
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                         }
                         Token(43) => {
                             let message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                            debug!("{:?} -> {}", message, self.members[self.next_member_index].to_string());
                             let result = self.send_letter(Letter{message, sender: SocketAddr::new(self.members[self.next_member_index], self.config.port)});
                             wait_ack.insert(sequence_number, self.members[self.next_member_index]);
-                            println!("SEND RESULT: {:?}", result);
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
                             sequence_number += 1;
-                            self.next_member_index += 1 % self.members.len();
+                            self.next_member_index = (self.next_member_index + 1) % self.members.len();
                         }
                         _ => unreachable!()
                     }
@@ -217,6 +233,7 @@ impl Gossip {
 }
 
 fn main() {
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Config::from_args();
 //    let proto_config = ProtocolConfig::from_args();
     Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
