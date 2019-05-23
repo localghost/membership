@@ -3,7 +3,7 @@ use mio::net::*;
 use mio_extras::timer::*;
 use std::io::Write;
 use structopt::StructOpt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
@@ -13,6 +13,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use log::{debug};
 use env_logger;
+use std::convert::TryInto;
+use std::default::Default;
+use std::path::Prefix::DeviceNS;
 
 #[derive(StructOpt, Default)]
 struct ProtocolConfig {
@@ -38,17 +41,32 @@ struct Config {
     proto_config: ProtocolConfig,
 }
 
-#[derive(Default)]
 struct Gossip {
     config: ProtocolConfig,
     client: Option<UdpSocket>,
     server: Option<UdpSocket>,
     timer: Timer<()>,
-    members: Vec<IpAddr>,
+    members: Vec<SocketAddr>,
     members_presence: HashSet<IpAddr>,
     next_member_index: usize,
     epoch: u64,
-    recv_buffer: [u8; 32],
+    recv_buffer: [u8; 64],
+}
+
+impl Default for Gossip {
+    fn default() -> Self {
+        Gossip {
+           config: Default::default(),
+            client: None,
+            server: None,
+            timer: Default::default(),
+            members: Default::default(),
+            members_presence: Default::default(),
+            next_member_index: 0,
+            epoch: 0,
+            recv_buffer: [0; 64]
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -58,16 +76,25 @@ enum MessageType {
 }
 
 struct Message {
-    buffer: BytesMut
+    buffer: BytesMut,
 }
 
 impl Message {
     fn create(message_type: MessageType, sequence_number: u64, epoch: u64) -> Self {
-        let mut message = Message{ buffer: BytesMut::with_capacity(32) };
+        let mut message = Message{ buffer: BytesMut::with_capacity(64) };
         message.buffer.put_i32_be(message_type as i32);
         message.buffer.put_u64_be(sequence_number);
         message.buffer.put_u64_be(epoch);
         message
+    }
+
+    fn with_members(&mut self, members: &[SocketAddr]) {
+        self.buffer.put_u8(members.len() as u8);
+        for member in members {
+            if let IpAddr::V4(ip) = member.ip() {
+                self.buffer.put_slice(&(ip.octets()));
+            }
+        }
     }
 
     fn get_type(&self) -> MessageType {
@@ -87,13 +114,24 @@ impl Message {
 
     fn get_sequence_number(&self) -> u64 {
         self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64).get_u64_be()
-
     }
 
     fn get_epoch(&self) -> u64 {
         self.get_cursor_into_buffer(
             (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64
         ).get_u64_be()
+    }
+
+    fn get_members(&self) -> Vec<SocketAddr> {
+        let mut cursor = self.get_cursor_into_buffer(
+            (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64
+        );
+        let count = cursor.get_u8();
+        let mut result = Vec::with_capacity(count as usize);
+        for idx in 0..count {
+            result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
+        }
+        result
     }
 
     fn into_inner(self) -> BytesMut {
@@ -107,17 +145,23 @@ impl Message {
     }
 }
 
-impl<T: AsRef<[u8]>> From<T> for Message {
-    fn from(src: T) -> Self {
-        Message{ buffer: bytes::BytesMut::from(src.as_ref()) }
+//impl<T: AsRef<[u8]>> From<T> for Message {
+//    fn from(src: T) -> Self {
+//        Message{ buffer: bytes::BytesMut::from(src.as_ref()) }
+//    }
+//}
+
+impl From<&[u8; 64]> for  Message {
+    fn from(src: &[u8; 64]) -> Self {
+        Message{ buffer: bytes::BytesMut::from(&src[0..]) }
     }
 }
 
 impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
-               "Message {{ type: {:?}, epoch: {}, sequence_number: {} }}",
-               self.get_type(), self.get_epoch(), self.get_sequence_number()
+               "Message {{ type: {:?}, epoch: {}, sequence_number: {}, members: {:?} }}",
+               self.get_type(), self.get_epoch(), self.get_sequence_number(), self.get_members()
         )
     }
 }
@@ -149,13 +193,13 @@ impl Gossip {
         Gossip{
             config: config,
             timer: Builder::default().build::<()>(),
-            recv_buffer: [0; 32],
+            recv_buffer: [0; 64],
             ..Default::default()
         }
     }
 
     fn join(&mut self, _member: IpAddr) {
-        self.members.push(_member);
+        self.members.push(SocketAddr::new(_member, self.config.port));
         self.members_presence.insert(_member);
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
@@ -175,10 +219,13 @@ impl Gossip {
                     match event.token() {
                         Token(53) => {
                             let letter = self.recv_letter();
+                            self.members.append(letter.message.get_members().as_mut());
+                            let m: HashSet<SocketAddr> = self.members.drain(..).collect();
+                            self.members.extend(m.into_iter());
                             match letter.message.get_type() {
                                 MessageType::PING => {
                                     if self.members_presence.insert(letter.sender.ip()) {
-                                        self.members.push(letter.sender.ip());
+                                        self.members.push(letter.sender);
                                     }
                                     pings_to_confirm.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
@@ -202,8 +249,9 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            let target = SocketAddr::new(self.members[self.next_member_index], self.config.port);
-                            let message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                            let target = self.members[self.next_member_index];
+                            let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                            message.with_members(self.members.as_slice());
                             let result = self.send_letter(OutgoingLetter{message, target});
                             wait_ack.insert(sequence_number, target);
                             poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
@@ -214,7 +262,8 @@ impl Gossip {
                         }
                         Token(53) => {
                             if let Some(confirm) = pings_to_confirm.pop_front() {
-                                let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                let mut message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                message.with_members(self.members.as_slice());
                                 let letter = OutgoingLetter { message, target: confirm.sender };
                                 self.send_letter(letter);
                             } else {
@@ -245,7 +294,7 @@ impl Gossip {
 
     fn recv_letter(&mut self) -> IncomingLetter {
         let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
-        let letter = IncomingLetter{sender, message: Message::from(self.recv_buffer)};
+        let letter = IncomingLetter{sender, message: Message::from(&self.recv_buffer)};
         debug!("{:?}", letter);
         letter
     }
