@@ -173,20 +173,15 @@ impl Gossip {
                 debug!("{:?}", event);
                 if event.readiness().is_readable() {
                     match event.token() {
-                        Token(43) => {
+                        Token(53) => {
                             let letter = self.recv_letter();
-                            debug!("{:?}", letter);
                             match letter.message.get_type() {
                                 MessageType::PING => {
                                     if self.members_presence.insert(letter.sender.ip()) {
                                         self.members.push(letter.sender.ip());
                                     }
                                     pings_to_confirm.push_back(letter);
-                                    // FIXME: this could overwrite the write from time timeout on epoch change
-                                    // - a single queue of messages to be sent (not rely on tokens?)
-                                    // - remember the previous registration?
-                                    // - remember the interest and reset it back when handling PING_ACK sending (see HERE)
-                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::writable(), PollOpt::edge()).unwrap();
+                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 MessageType::PING_ACK => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
@@ -198,31 +193,33 @@ impl Gossip {
                         }
                         Token(11) => {
                             self.epoch += 1;
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
-                            self.reset_protocol_timer()
+                            // TODO: drain `wait_ack` and mark the nodes as failed (suspected in the future).
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
+                            self.reset_protocol_timer();
                         }
                         _ => unreachable!()
                     }
                 } else if event.readiness().is_writable() {
                     match event.token() {
-                        Token(53) => {
-                            let confirm = pings_to_confirm.pop_front().unwrap();
-                            let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
-                            let letter = OutgoingLetter{message, target: confirm.sender};
-                            debug!("{:?}", letter);
-                            self.send_letter(letter);
-                            // HERE
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
-                        }
                         Token(43) => {
+                            let target = SocketAddr::new(self.members[self.next_member_index], self.config.port);
                             let message = Message::create(MessageType::PING, sequence_number, self.epoch);
-                            let letter = OutgoingLetter{message, target: SocketAddr::new(self.members[self.next_member_index], self.config.port)};
-                            debug!("{:?}", letter);
-                            let result = self.send_letter(letter);
-                            wait_ack.insert(sequence_number, self.members[self.next_member_index]);
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable(), PollOpt::edge()).unwrap();
+                            let result = self.send_letter(OutgoingLetter{message, target});
+                            wait_ack.insert(sequence_number, target);
+                            poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                             sequence_number += 1;
+                            // FIXME the members of this list will be added/removed during the list lifetime, thus don't assume
+                            // that `next_member_index` is valid on subsequent iteration.
                             self.next_member_index = (self.next_member_index + 1) % self.members.len();
+                        }
+                        Token(53) => {
+                            if let Some(confirm) = pings_to_confirm.pop_front() {
+                                let message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                let letter = OutgoingLetter { message, target: confirm.sender };
+                                self.send_letter(letter);
+                            } else {
+                                poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable(), PollOpt::edge()).unwrap();
+                            }
                         }
                         _ => unreachable!()
                     }
@@ -242,18 +239,16 @@ impl Gossip {
     }
 
     fn send_letter(&mut self, letter: OutgoingLetter) {
+        debug!("{:?}", letter);
         self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target);
     }
 
     fn recv_letter(&mut self) -> IncomingLetter {
         let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
-        IncomingLetter{sender, message: Message::from(self.recv_buffer)}
+        let letter = IncomingLetter{sender, message: Message::from(self.recv_buffer)};
+        debug!("{:?}", letter);
+        letter
     }
-
-//    fn ping(&mut self, poll: &Poll) {
-//        self.client = Some(TcpStream::connect(&addr).unwrap());
-//        poll.register(self.client.as_ref().unwrap(), Token(42), Ready::writable(), PollOpt::edge()).unwrap();
-//    }
 }
 
 fn main() {
