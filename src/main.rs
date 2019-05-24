@@ -88,13 +88,28 @@ impl Message {
         message
     }
 
-    fn with_members(&mut self, members: &[SocketAddr]) {
-        self.buffer.put_u8(members.len() as u8);
-        for member in members {
-            if let IpAddr::V4(ip) = member.ip() {
-                self.buffer.put_slice(&(ip.octets()));
+    fn with_members(&mut self, members: &[SocketAddr]) -> usize {
+        // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
+        let mut cursor = Cursor::new(&mut self.buffer);
+        let position = cursor.position();
+        let count = std::cmp::min(members.len(), std::mem::size_of::<u8>()-1);
+        let mut header = 0u8;
+        for idx in 0..count {
+            match members[idx].ip() {
+                IpAddr::V4(ip) => {
+                    cursor.get_mut().put_slice(&(ip.octets()));
+                }
+                IpAddr::V6(ip) => {
+                    cursor.get_mut().put_u8(1);
+//                    self.buffer.put_slice(&(ip.octets()));
+                    header |= 1 << idx;
+                }
             }
         }
+        header |= 1 << count;
+        cursor.set_position(position);
+        cursor.get_mut().put_u8(header);
+        count
     }
 
     fn get_type(&self) -> MessageType {
@@ -126,7 +141,7 @@ impl Message {
         let mut cursor = self.get_cursor_into_buffer(
             (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64
         );
-        let count = cursor.get_u8();
+        let header = cursor.get_u8();
         let mut result = Vec::with_capacity(count as usize);
         for idx in 0..count {
             result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
@@ -153,7 +168,7 @@ impl Message {
 
 impl From<&[u8; 64]> for  Message {
     fn from(src: &[u8; 64]) -> Self {
-        Message{ buffer: bytes::BytesMut::from(&src[0..]) }
+        Message{ buffer: bytes::BytesMut::from(&src[..]) }
     }
 }
 
