@@ -91,12 +91,14 @@ impl Message {
 
     fn with_members(&mut self, members: &[SocketAddr]) -> usize {
         // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
-        let mut cursor = Cursor::new(&mut self.buffer);
-        cursor.set_position(20);
-        let position = cursor.position();
-        info!("{:?}", position);
-        cursor.set_position(position + 1);
+        debug!("BUFINMEM={:?}", self.buffer);
+//        let mut cursor = Cursor::new(&mut self.buffer);
+//        cursor.set_position((std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64);
+//        let position = cursor.position();
+//        info!("POSITION={:?}", position);
+//        cursor.set_position(position + 1);
         let mut header = 0u8;
+        self.buffer.put_u8(header);
         let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
         info!("len = {:?}, header = {:?}, count = {:?}", members.len(), std::mem::size_of_val(&header)*8-1, count);
         for idx in 0..count {
@@ -104,18 +106,21 @@ impl Message {
             match members[idx].ip() {
                 IpAddr::V4(ip) => {
                     info!("assing ipv4 = {:?}", ip);
-                    cursor.get_mut().put_slice(&(ip.octets()));
+//                    cursor.get_mut().put_slice(&(ip.octets()));
+                    self.buffer.put_slice(&(ip.octets()))
                 }
                 IpAddr::V6(ip) => {
-                    cursor.get_mut().put_u8(1);
+//                    cursor.get_mut().put_u8(1);
+                    self.buffer.put_u8(1);
 //                    self.buffer.put_slice(&(ip.octets()));
                     header |= 1 << idx;
                 }
             }
         }
         header |= 1 << count;
-        cursor.set_position(position);
-        cursor.get_mut().put_u8(header);
+        let mut cursor = Cursor::new(&mut self.buffer);
+        cursor.set_position(20);
+        cursor.put_u8(header);
         count
     }
 
@@ -320,6 +325,7 @@ impl Gossip {
     }
 
     fn send_letter(&mut self, letter: OutgoingLetter) {
+        debug!("BUFFER={:?}", letter.message.buffer);
         debug!("{:?}", letter);
         self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target);
     }
