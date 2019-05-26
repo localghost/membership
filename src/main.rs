@@ -11,7 +11,7 @@ use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use log::{debug};
+use log::{debug, info};
 use env_logger;
 use std::convert::TryInto;
 use std::default::Default;
@@ -82,6 +82,7 @@ struct Message {
 impl Message {
     fn create(message_type: MessageType, sequence_number: u64, epoch: u64) -> Self {
         let mut message = Message{ buffer: BytesMut::with_capacity(64) };
+        debug!("CREATED BUFFER: {:?}", message.buffer);
         message.buffer.put_i32_be(message_type as i32);
         message.buffer.put_u64_be(sequence_number);
         message.buffer.put_u64_be(epoch);
@@ -91,12 +92,18 @@ impl Message {
     fn with_members(&mut self, members: &[SocketAddr]) -> usize {
         // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
         let mut cursor = Cursor::new(&mut self.buffer);
+        cursor.set_position(20);
         let position = cursor.position();
-        let count = std::cmp::min(members.len(), std::mem::size_of::<u8>()-1);
+        info!("{:?}", position);
+        cursor.set_position(position + 1);
         let mut header = 0u8;
+        let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
+        info!("len = {:?}, header = {:?}, count = {:?}", members.len(), std::mem::size_of_val(&header)*8-1, count);
         for idx in 0..count {
+            debug!("{:?}", members[idx]);
             match members[idx].ip() {
                 IpAddr::V4(ip) => {
+                    info!("assing ipv4 = {:?}", ip);
                     cursor.get_mut().put_slice(&(ip.octets()));
                 }
                 IpAddr::V6(ip) => {
@@ -142,9 +149,19 @@ impl Message {
             (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64
         );
         let header = cursor.get_u8();
+        debug!("{:?}", header);
+        let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
+        debug!("count={:?}", count);
         let mut result = Vec::with_capacity(count as usize);
         for idx in 0..count {
-            result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
+            if (header & 1) == 0 {
+                debug!("{:?}", self.buffer);
+                result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
+            }
+            else {
+                // IPv6
+            }
+            header >> 1;
         }
         result
     }
