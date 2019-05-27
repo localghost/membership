@@ -42,34 +42,6 @@ struct Config {
     proto_config: ProtocolConfig,
 }
 
-struct Gossip {
-    config: ProtocolConfig,
-    client: Option<UdpSocket>,
-    server: Option<UdpSocket>,
-    timer: Timer<()>,
-    members: Vec<SocketAddr>,
-    members_presence: HashSet<IpAddr>,
-    next_member_index: usize,
-    epoch: u64,
-    recv_buffer: [u8; 64],
-}
-
-impl Default for Gossip {
-    fn default() -> Self {
-        Gossip {
-           config: Default::default(),
-            client: None,
-            server: None,
-            timer: Default::default(),
-            members: Default::default(),
-            members_presence: Default::default(),
-            next_member_index: 0,
-            epoch: 0,
-            recv_buffer: [0; 64]
-        }
-    }
-}
-
 #[derive(Debug)]
 enum MessageType {
     PING,
@@ -95,16 +67,12 @@ impl Message {
         let mut header = 0u8;
         let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
         for idx in 0..count {
-            debug!("{:?}", members[idx]);
             match members[idx].ip() {
                 IpAddr::V4(ip) => {
-//                    cursor.get_mut().put_slice(&(ip.octets()));
                     self.buffer.put_slice(&(ip.octets()))
                 }
                 IpAddr::V6(ip) => {
-//                    cursor.get_mut().put_u8(1);
                     self.buffer.put_u8(1);
-//                    self.buffer.put_slice(&(ip.octets()));
                     header |= 1 << idx;
                 }
             }
@@ -212,6 +180,34 @@ impl fmt::Debug for IncomingLetter {
     }
 }
 
+struct Gossip {
+    config: ProtocolConfig,
+    client: Option<UdpSocket>,
+    server: Option<UdpSocket>,
+    timer: Timer<()>,
+    members: Vec<SocketAddr>,
+    members_presence: HashSet<SocketAddr>,
+    next_member_index: usize,
+    epoch: u64,
+    recv_buffer: [u8; 64],
+}
+
+impl Default for Gossip {
+    fn default() -> Self {
+        Gossip {
+            config: Default::default(),
+            client: None,
+            server: None,
+            timer: Default::default(),
+            members: Default::default(),
+            members_presence: Default::default(),
+            next_member_index: 0,
+            epoch: 0,
+            recv_buffer: [0; 64]
+        }
+    }
+}
+
 impl Gossip {
     fn new(config: ProtocolConfig) -> Gossip {
         Gossip{
@@ -224,7 +220,7 @@ impl Gossip {
 
     fn join(&mut self, _member: IpAddr) {
         self.members.push(SocketAddr::new(_member, self.config.port));
-        self.members_presence.insert(_member);
+        self.members_presence.insert(SocketAddr::new(_member, self.config.port));
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
         self.reset_protocol_timer();
@@ -243,14 +239,18 @@ impl Gossip {
                     match event.token() {
                         Token(53) => {
                             let letter = self.recv_letter();
-                            self.members.append(letter.message.get_members().as_mut());
-                            let m: HashSet<SocketAddr> = self.members.drain(..).collect();
-                            self.members.extend(m.into_iter());
+                            for member in letter.message.get_members() {
+                                if self.members_presence.insert(member) {
+                                    info!("Member joined: {:?}", member);
+                                    self.members.push(member);
+                                }
+                            }
+                            if self.members_presence.insert(letter.sender) {
+                                info!("Member joined: {:?}", letter.sender);
+                                self.members.push(letter.sender);
+                            }
                             match letter.message.get_type() {
                                 MessageType::PING => {
-                                    if self.members_presence.insert(letter.sender.ip()) {
-                                        self.members.push(letter.sender);
-                                    }
                                     pings_to_confirm.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
