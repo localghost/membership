@@ -11,7 +11,7 @@ use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use log::{debug, info};
+use log::{debug, info, error};
 use env_logger;
 use std::convert::TryInto;
 use std::default::Default;
@@ -240,6 +240,9 @@ impl Gossip {
                         Token(53) => {
                             let letter = self.recv_letter();
                             for member in letter.message.get_members() {
+                                if member == format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap() {
+                                    continue;
+                                }
                                 if self.members_presence.insert(member) {
                                     info!("Member joined: {:?}", member);
                                     self.members.push(member);
@@ -265,6 +268,16 @@ impl Gossip {
                         Token(11) => {
                             self.epoch += 1;
                             // TODO: drain `wait_ack` and mark the nodes as failed (suspected in the future).
+                            for (_, sa) in &wait_ack {
+                                if self.members_presence.remove(sa) {
+                                    let idx = self.members.iter().position(|e| { e == sa }).unwrap();
+                                    self.members.remove(idx);
+                                }
+                            }
+                            wait_ack.drain();
+                            if wait_ack.len() > 0 {
+                                error!("wait_ack should be empty!");
+                            }
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
                             self.reset_protocol_timer();
                         }
@@ -278,8 +291,9 @@ impl Gossip {
                             message.with_members(self.members.as_slice());
                             let result = self.send_letter(OutgoingLetter{message, target});
                             wait_ack.insert(sequence_number, target);
-                            poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                             sequence_number += 1;
+
+                            poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                             // FIXME the members of this list will be added/removed during the list lifetime, thus don't assume
                             // that `next_member_index` is valid on subsequent iteration.
                             self.next_member_index = (self.next_member_index + 1) % self.members.len();
