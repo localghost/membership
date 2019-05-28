@@ -3,7 +3,7 @@ use mio::net::*;
 use mio_extras::timer::*;
 use std::io::Write;
 use structopt::StructOpt;
-use std::net::{IpAddr, SocketAddr, Ipv4Addr};
+use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
@@ -190,31 +190,41 @@ struct Gossip {
     next_member_index: usize,
     epoch: u64,
     recv_buffer: [u8; 64],
+    myself: SocketAddr,
 }
 
-impl Default for Gossip {
-    fn default() -> Self {
-        Gossip {
-            config: Default::default(),
-            client: None,
-            server: None,
-            timer: Default::default(),
-            members: Default::default(),
-            members_presence: Default::default(),
-            next_member_index: 0,
-            epoch: 0,
-            recv_buffer: [0; 64]
-        }
-    }
-}
+//impl Default for Gossip {
+//    fn default() -> Self {
+//        let config_default = Default::default();
+//        Gossip {
+//            config: config_default,
+//            client: None,
+//            server: None,
+//            timer: Default::default(),
+//            members: Default::default(),
+//            members_presence: Default::default(),
+//            next_member_index: 0,
+//            epoch: 0,
+//            recv_buffer: [0; 64],
+//            myself: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config_default.bind_address).unwrap(), config_default.port))
+//        }
+//    }
+//}
 
 impl Gossip {
     fn new(config: ProtocolConfig) -> Gossip {
+        let myself = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config.bind_address).unwrap(), config.port));
         Gossip{
-            config: config,
+            config,
+            client: None,
+            server: None,
             timer: Builder::default().build::<()>(),
+            members: vec!(),
+            members_presence: HashSet::new(),
+            next_member_index: 0,
+            epoch: 0,
             recv_buffer: [0; 64],
-            ..Default::default()
+            myself
         }
     }
 
@@ -227,7 +237,6 @@ impl Gossip {
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
-        let mut buffer: Vec<IpAddr>;
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
         let mut wait_ack = HashMap::new();
@@ -253,6 +262,7 @@ impl Gossip {
                                 self.members.push(letter.sender);
                             }
                             match letter.message.get_type() {
+                                // FIXME: even when switching epochs it should not pause responding to Pings
                                 MessageType::PING => {
                                     pings_to_confirm.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
@@ -267,11 +277,15 @@ impl Gossip {
                         }
                         Token(11) => {
                             self.epoch += 1;
-                            // TODO: drain `wait_ack` and mark the nodes as failed (suspected in the future).
+                            // TODO: mark the nodes as suspected first.
                             for (_, sa) in &wait_ack {
                                 if self.members_presence.remove(sa) {
                                     let idx = self.members.iter().position(|e| { e == sa }).unwrap();
                                     self.members.remove(idx);
+                                    if idx <= self.next_member_index && self.next_member_index > 0 {
+                                        self.next_member_index -= 1;
+                                    }
+                                    info!("Member removed: {:?}", sa);
                                 }
                             }
                             wait_ack.drain();
@@ -286,17 +300,16 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            let target = self.members[self.next_member_index];
-                            let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
-                            message.with_members(self.members.as_slice());
-                            let result = self.send_letter(OutgoingLetter{message, target});
-                            wait_ack.insert(sequence_number, target);
-                            sequence_number += 1;
-
+                            if self.members.len() > 0 {
+                                let target = self.members[self.next_member_index];
+                                let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                                message.with_members(self.members.as_slice());
+                                let result = self.send_letter(OutgoingLetter { message, target });
+                                wait_ack.insert(sequence_number, target);
+                                sequence_number += 1;
+                                self.next_member_index = (self.next_member_index + 1) % self.members.len();
+                            }
                             poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
-                            // FIXME the members of this list will be added/removed during the list lifetime, thus don't assume
-                            // that `next_member_index` is valid on subsequent iteration.
-                            self.next_member_index = (self.next_member_index + 1) % self.members.len();
                         }
                         Token(53) => {
                             if let Some(confirm) = pings_to_confirm.pop_front() {
@@ -336,6 +349,22 @@ impl Gossip {
         let letter = IncomingLetter{sender, message: Message::from(&self.recv_buffer)};
         debug!("{:?}", letter);
         letter
+    }
+
+    fn join_members(&mut self, members: &[SocketAddr]) {
+        let mut new_members = members.iter().filter(|&member| {
+            *member != self.myself && self.members_presence.insert(*member)
+        });
+        self.members.extend(new_members);
+//        for member in members {
+//            if member == format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap() {
+//                continue;
+//            }
+//            if self.members_presence.insert(member) {
+//                info!("Member joined: {:?}", member);
+//                self.members.push(member);
+//            }
+//        }
     }
 }
 
