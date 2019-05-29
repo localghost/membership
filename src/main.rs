@@ -229,7 +229,7 @@ impl Gossip {
     }
 
     fn join(&mut self, _member: IpAddr) {
-        self.join_members(&[SocketAddr::new(_member, self.config.port)]);
+        self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)));
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
         self.reset_protocol_timer();
@@ -247,8 +247,9 @@ impl Gossip {
                     match event.token() {
                         Token(53) => {
                             let letter = self.recv_letter();
-                            self.join_members(&letter.message.get_members());
-                            self.join_members(&[letter.sender]);
+                            self.join_members(
+                                letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
+                            );
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
                                 MessageType::PING => {
@@ -266,16 +267,7 @@ impl Gossip {
                         Token(11) => {
                             self.epoch += 1;
                             // TODO: mark the nodes as suspected first.
-                            for (_, sa) in wait_ack.drain() {
-                                if self.members_presence.remove(&sa) {
-                                    let idx = self.members.iter().position(|e| { *e == sa }).unwrap();
-                                    self.members.remove(idx);
-                                    if idx <= self.next_member_index && self.next_member_index > 0 {
-                                        self.next_member_index -= 1;
-                                    }
-                                    info!("Member removed: {:?}", sa);
-                                }
-                            }
+                            self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
                             self.reset_protocol_timer();
                         }
@@ -289,7 +281,9 @@ impl Gossip {
                                 let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
                                 // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                                 // as that may lead to late failure discovery
-                                message.with_members(self.members.as_slice());
+                                message.with_members(
+                                    &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
+                                );
                                 let result = self.send_letter(OutgoingLetter { message, target });
                                 wait_ack.insert(sequence_number, target);
                                 sequence_number += 1;
@@ -337,14 +331,27 @@ impl Gossip {
         letter
     }
 
-    fn join_members(&mut self, members: &[SocketAddr]) {
+    fn join_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
         for member in members {
-            if *member == self.myself {
+            if member == self.myself {
                 continue;
             }
-            if self.members_presence.insert(*member) {
-                info!("Member joined: {:?}", *member);
-                self.members.push(*member);
+            if self.members_presence.insert(member) {
+                info!("Member joined: {:?}", member);
+                self.members.push(member);
+            }
+        }
+    }
+
+    fn remove_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
+        for member in members {
+            if self.members_presence.remove(&member) {
+                let idx = self.members.iter().position(|e| { *e == member }).unwrap();
+                self.members.remove(idx);
+                if idx <= self.next_member_index && self.next_member_index > 0 {
+                    self.next_member_index -= 1;
+                }
+                info!("Member removed: {:?}", member);
             }
         }
     }
