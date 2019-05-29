@@ -229,8 +229,7 @@ impl Gossip {
     }
 
     fn join(&mut self, _member: IpAddr) {
-        self.members.push(SocketAddr::new(_member, self.config.port));
-        self.members_presence.insert(SocketAddr::new(_member, self.config.port));
+        self.join_members(&[SocketAddr::new(_member, self.config.port)]);
         let poll = Poll::new().unwrap();
         poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
         self.reset_protocol_timer();
@@ -239,7 +238,7 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
-        let mut wait_ack = HashMap::new();
+        let mut wait_ack: HashMap<u64, SocketAddr> = HashMap::new();
         loop {
             poll.poll(&mut events, None).unwrap();
             for event in events.iter() {
@@ -248,19 +247,8 @@ impl Gossip {
                     match event.token() {
                         Token(53) => {
                             let letter = self.recv_letter();
-                            for member in letter.message.get_members() {
-                                if member == format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap() {
-                                    continue;
-                                }
-                                if self.members_presence.insert(member) {
-                                    info!("Member joined: {:?}", member);
-                                    self.members.push(member);
-                                }
-                            }
-                            if self.members_presence.insert(letter.sender) {
-                                info!("Member joined: {:?}", letter.sender);
-                                self.members.push(letter.sender);
-                            }
+                            self.join_members(&letter.message.get_members());
+                            self.join_members(&[letter.sender]);
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
                                 MessageType::PING => {
@@ -278,19 +266,15 @@ impl Gossip {
                         Token(11) => {
                             self.epoch += 1;
                             // TODO: mark the nodes as suspected first.
-                            for (_, sa) in &wait_ack {
-                                if self.members_presence.remove(sa) {
-                                    let idx = self.members.iter().position(|e| { e == sa }).unwrap();
+                            for (_, sa) in wait_ack.drain() {
+                                if self.members_presence.remove(&sa) {
+                                    let idx = self.members.iter().position(|e| { *e == sa }).unwrap();
                                     self.members.remove(idx);
                                     if idx <= self.next_member_index && self.next_member_index > 0 {
                                         self.next_member_index -= 1;
                                     }
                                     info!("Member removed: {:?}", sa);
                                 }
-                            }
-                            wait_ack.drain();
-                            if wait_ack.len() > 0 {
-                                error!("wait_ack should be empty!");
                             }
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
                             self.reset_protocol_timer();
@@ -303,6 +287,8 @@ impl Gossip {
                             if self.members.len() > 0 {
                                 let target = self.members[self.next_member_index];
                                 let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                                // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                                // as that may lead to late failure discovery
                                 message.with_members(self.members.as_slice());
                                 let result = self.send_letter(OutgoingLetter { message, target });
                                 wait_ack.insert(sequence_number, target);
@@ -352,19 +338,15 @@ impl Gossip {
     }
 
     fn join_members(&mut self, members: &[SocketAddr]) {
-        let mut new_members = members.iter().filter(|&member| {
-            *member != self.myself && self.members_presence.insert(*member)
-        });
-        self.members.extend(new_members);
-//        for member in members {
-//            if member == format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap() {
-//                continue;
-//            }
-//            if self.members_presence.insert(member) {
-//                info!("Member joined: {:?}", member);
-//                self.members.push(member);
-//            }
-//        }
+        for member in members {
+            if *member == self.myself {
+                continue;
+            }
+            if self.members_presence.insert(*member) {
+                info!("Member joined: {:?}", *member);
+                self.members.push(*member);
+            }
+        }
     }
 }
 
