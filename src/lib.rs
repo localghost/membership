@@ -1,7 +1,6 @@
 use mio::*;
 use mio::net::*;
 use mio_extras::timer::*;
-use std::io::Write;
 use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
@@ -12,14 +11,10 @@ use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use log::{debug, info, error};
-use env_logger;
-use std::convert::TryInto;
 use std::default::Default;
-use std::path::Prefix::DeviceNS;
-use core::borrow::BorrowMut;
 
 #[derive(StructOpt, Default)]
-struct ProtocolConfig {
+pub struct ProtocolConfig {
     #[structopt(short="p", long="port", default_value="2345")]
     port: u16,
 
@@ -34,18 +29,20 @@ struct ProtocolConfig {
 }
 
 #[derive(StructOpt, Default)]
-struct Config {
+pub struct Config {
     #[structopt(short="j", long="join-address", default_value="127.0.0.1")]
-    join_address: String,
+    pub join_address: String,
 
+    // FIXME: this should not be public, fix dependencies between the two configs, make clear which is about protocol
+    // and which about client properties.
     #[structopt(flatten)]
-    proto_config: ProtocolConfig,
+    pub proto_config: ProtocolConfig,
 }
 
 #[derive(Debug)]
 enum MessageType {
-    PING,
-    PING_ACK,
+    Ping,
+    PingAck,
 }
 
 struct Message {
@@ -71,7 +68,7 @@ impl Message {
                 IpAddr::V4(ip) => {
                     self.buffer.put_slice(&(ip.octets()))
                 }
-                IpAddr::V6(ip) => {
+                IpAddr::V6(_ip) => {
                     self.buffer.put_u8(1);
                     header |= 1 << idx;
                 }
@@ -85,11 +82,11 @@ impl Message {
     fn get_type(&self) -> MessageType {
         let encoded_type = self.get_cursor_into_buffer(0).get_i32_be();
         match encoded_type {
-            x if x == MessageType::PING as i32 => {
-                MessageType::PING
+            x if x == MessageType::Ping as i32 => {
+                MessageType::Ping
             },
-            x if x == MessageType::PING_ACK as i32 => {
-                MessageType::PING_ACK
+            x if x == MessageType::PingAck as i32 => {
+                MessageType::PingAck
             },
             _ => {
                 panic!("No such message type")
@@ -180,9 +177,8 @@ impl fmt::Debug for IncomingLetter {
     }
 }
 
-struct Gossip {
+pub struct Gossip {
     config: ProtocolConfig,
-    client: Option<UdpSocket>,
     server: Option<UdpSocket>,
     timer: Timer<()>,
     members: Vec<SocketAddr>,
@@ -212,11 +208,10 @@ struct Gossip {
 //}
 
 impl Gossip {
-    fn new(config: ProtocolConfig) -> Gossip {
+    pub fn new(config: ProtocolConfig) -> Gossip {
         let myself = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config.bind_address).unwrap(), config.port));
         Gossip{
             config,
-            client: None,
             server: None,
             timer: Builder::default().build::<()>(),
             members: vec!(),
@@ -228,10 +223,10 @@ impl Gossip {
         }
     }
 
-    fn join(&mut self, _member: IpAddr) {
+    pub fn join(&mut self, _member: IpAddr) {
         self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)));
         let poll = Poll::new().unwrap();
-        poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge());
+        poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge()).unwrap();
         self.reset_protocol_timer();
         self.bind(&poll);
 
@@ -252,16 +247,15 @@ impl Gossip {
                             );
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
-                                MessageType::PING => {
+                                MessageType::Ping => {
                                     pings_to_confirm.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
-                                MessageType::PING_ACK => {
+                                MessageType::PingAck => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
                                     wait_ack.remove(&letter.message.get_sequence_number());
                                 }
-                                _ => unreachable!()
                             }
                         }
                         Token(11) => {
@@ -278,13 +272,13 @@ impl Gossip {
                         Token(43) => {
                             if self.members.len() > 0 {
                                 let target = self.members[self.next_member_index];
-                                let mut message = Message::create(MessageType::PING, sequence_number, self.epoch);
+                                let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
                                 // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                                 // as that may lead to late failure discovery
                                 message.with_members(
                                     &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                 );
-                                let result = self.send_letter(OutgoingLetter { message, target });
+                                self.send_letter(OutgoingLetter { message, target });
                                 wait_ack.insert(sequence_number, target);
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
@@ -293,7 +287,7 @@ impl Gossip {
                         }
                         Token(53) => {
                             if let Some(confirm) = pings_to_confirm.pop_front() {
-                                let mut message = Message::create(MessageType::PING_ACK, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                                 message.with_members(self.members.as_slice());
                                 let letter = OutgoingLetter { message, target: confirm.sender };
                                 self.send_letter(letter);
@@ -321,7 +315,7 @@ impl Gossip {
     fn send_letter(&mut self, letter: OutgoingLetter) {
         debug!("send bufer length={}", letter.message.buffer.len());
         debug!("{:?}", letter);
-        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target);
+        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target).unwrap();
     }
 
     fn recv_letter(&mut self) -> IncomingLetter {
@@ -357,9 +351,3 @@ impl Gossip {
     }
 }
 
-fn main() {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
-    let config = Config::from_args();
-//    let proto_config = ProtocolConfig::from_args();
-    Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
-}
