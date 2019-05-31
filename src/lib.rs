@@ -286,6 +286,7 @@ impl Gossip {
                             poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                         }
                         Token(53) => {
+                            // TODO: confirm pings until WouldBlock
                             if let Some(confirm) = pings_to_confirm.pop_front() {
                                 let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                                 message.with_members(self.members.as_slice());
