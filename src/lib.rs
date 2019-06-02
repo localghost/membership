@@ -13,6 +13,9 @@ use std::fmt;
 use log::{debug, info, error};
 use std::default::Default;
 
+mod message;
+use crate::message::{MessageType, Message};
+
 #[derive(StructOpt, Default)]
 pub struct ProtocolConfig {
     #[structopt(short="p", long="port", default_value="2345")]
@@ -39,125 +42,9 @@ pub struct Config {
     pub proto_config: ProtocolConfig,
 }
 
-#[derive(Debug)]
-enum MessageType {
-    Ping,
-    PingAck,
-}
-
-struct Message {
-    buffer: BytesMut,
-}
-
-impl Message {
-    fn create(message_type: MessageType, sequence_number: u64, epoch: u64) -> Self {
-        let mut message = Message{ buffer: BytesMut::with_capacity(64) };
-        message.buffer.put_i32_be(message_type as i32);
-        message.buffer.put_u64_be(sequence_number);
-        message.buffer.put_u64_be(epoch);
-        message
-    }
-
-    fn with_members(&mut self, members: &[SocketAddr]) -> usize {
-        // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
-        self.buffer.resize(self.buffer.len()+1, 0u8); // leave a byte for header
-        let mut header = 0u8;
-        let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
-        for idx in 0..count {
-            match members[idx].ip() {
-                IpAddr::V4(ip) => {
-                    self.buffer.put_slice(&(ip.octets()))
-                }
-                IpAddr::V6(_ip) => {
-                    self.buffer.put_u8(1);
-                    header |= 1 << idx;
-                }
-            }
-        }
-        header |= 1 << count;
-        *self.buffer.iter_mut().skip(20).next().unwrap() = header;
-        count
-    }
-
-    fn get_type(&self) -> MessageType {
-        let encoded_type = self.get_cursor_into_buffer(0).get_i32_be();
-        match encoded_type {
-            x if x == MessageType::Ping as i32 => {
-                MessageType::Ping
-            },
-            x if x == MessageType::PingAck as i32 => {
-                MessageType::PingAck
-            },
-            _ => {
-                panic!("No such message type")
-            }
-        }
-    }
-
-    fn get_sequence_number(&self) -> u64 {
-        self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64).get_u64_be()
-    }
-
-    fn get_epoch(&self) -> u64 {
-        self.get_cursor_into_buffer(
-            (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64
-        ).get_u64_be()
-    }
-
-    fn get_members(&self) -> Vec<SocketAddr> {
-        let mut cursor = self.get_cursor_into_buffer(
-            (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64
-        );
-        let header = cursor.get_u8();
-        let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
-        let mut result = Vec::with_capacity(count as usize);
-        for idx in 0..count {
-            if (header & 1) == 0 {
-                result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
-            }
-            else {
-                // IPv6
-            }
-            header >> 1;
-        }
-        result
-    }
-
-    fn into_inner(self) -> BytesMut {
-        self.buffer
-    }
-
-    fn get_cursor_into_buffer(&self, position: u64) -> Cursor<&BytesMut> {
-        let mut cursor = Cursor::new(&self.buffer);
-        cursor.set_position(position);
-        cursor
-    }
-}
-
-//impl<T: AsRef<[u8]>> From<T> for Message {
-//    fn from(src: T) -> Self {
-//        Message{ buffer: bytes::BytesMut::from(src.as_ref()) }
-//    }
-//}
-
-impl From<&[u8; 64]> for  Message {
-    fn from(src: &[u8; 64]) -> Self {
-        Message{ buffer: bytes::BytesMut::from(&src[..]) }
-    }
-}
-
-impl fmt::Debug for Message {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "Message {{ type: {:?}, epoch: {}, sequence_number: {}, members: {:?} }}",
-               self.get_type(), self.get_epoch(), self.get_sequence_number(), self.get_members()
-        )
-    }
-}
-
 struct OutgoingLetter {
     target: SocketAddr,
-    message: Message,
+    message: message::Message,
 }
 
 impl fmt::Debug for OutgoingLetter {
@@ -168,7 +55,7 @@ impl fmt::Debug for OutgoingLetter {
 
 struct IncomingLetter {
     sender: SocketAddr,
-    message: Message,
+    message: message::Message,
 }
 
 impl fmt::Debug for IncomingLetter {
@@ -235,7 +122,7 @@ impl Gossip {
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
         let mut wait_ack: HashMap<u64, SocketAddr> = HashMap::new();
         loop {
-            poll.poll(&mut events, None).unwrap();
+            poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
                 debug!("{:?}", event);
                 if event.readiness().is_readable() {
@@ -247,14 +134,17 @@ impl Gossip {
                             );
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
-                                MessageType::Ping => {
+                                message::MessageType::Ping => {
                                     pings_to_confirm.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
-                                MessageType::PingAck => {
+                                message::MessageType::PingAck => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
                                     wait_ack.remove(&letter.message.get_sequence_number());
+                                }
+                                message::MessageType::PingIndirect => {
+
                                 }
                             }
                         }
@@ -272,7 +162,8 @@ impl Gossip {
                         Token(43) => {
                             if self.members.len() > 0 {
                                 let target = self.members[self.next_member_index];
-                                let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
+//                                self.send_ping(target, sequence_number);
+                                let mut message = message::Message::create(message::MessageType::Ping, sequence_number, self.epoch);
                                 // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                                 // as that may lead to late failure discovery
                                 message.with_members(
@@ -288,7 +179,7 @@ impl Gossip {
                         Token(53) => {
                             // TODO: confirm pings until WouldBlock
                             if let Some(confirm) = pings_to_confirm.pop_front() {
-                                let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                let mut message = message::Message::create(message::MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                                 message.with_members(self.members.as_slice());
                                 let letter = OutgoingLetter { message, target: confirm.sender };
                                 self.send_letter(letter);
@@ -303,6 +194,18 @@ impl Gossip {
         }
     }
 
+//    fn send_ping(&mut self, target: SocketAddr, sequence_number: u64) {
+//        let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
+//        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+//        // as that may lead to late failure discovery
+//        let member_index = self.members.iter().position(|x| { *x == target}).unwrap();
+//        message.with_members(
+//            &self.members.iter().skip(member_index).chain(self.members.iter().take(member_index)).cloned().collect::<Vec<_>>()
+//        );
+//        self.send_letter(OutgoingLetter { message, target });
+////        wait_ack.insert(sequence_number, target);
+//    }
+
     fn bind(&mut self, poll: &Poll) {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
         self.server = Some(UdpSocket::bind(&address).unwrap());
@@ -314,14 +217,13 @@ impl Gossip {
     }
 
     fn send_letter(&mut self, letter: OutgoingLetter) {
-        debug!("send bufer length={}", letter.message.buffer.len());
         debug!("{:?}", letter);
         self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target).unwrap();
     }
 
     fn recv_letter(&mut self) -> IncomingLetter {
         let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
-        let letter = IncomingLetter{sender, message: Message::from(&self.recv_buffer)};
+        let letter = IncomingLetter{sender, message: message::Message::from(&self.recv_buffer)};
         debug!("{:?}", letter);
         letter
     }
@@ -349,6 +251,14 @@ impl Gossip {
                 info!("Member removed: {:?}", member);
             }
         }
+    }
+
+    fn increment_epoch(&mut self) {
+        //
+    }
+
+    fn ping_indirect(&mut self) {
+
     }
 }
 
