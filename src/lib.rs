@@ -1,6 +1,6 @@
 use mio::*;
 use mio::net::*;
-use mio_extras::timer::*;
+//use mio_extras::timer::*;
 use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
@@ -8,7 +8,7 @@ use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use std::fmt;
 use log::{debug, info, error};
 use std::default::Default;
@@ -67,11 +67,11 @@ impl fmt::Debug for IncomingLetter {
 pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    timer: Timer<()>,
     members: Vec<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
+    epoch_duration: Duration,
     recv_buffer: [u8; 64],
     myself: SocketAddr,
 }
@@ -100,11 +100,11 @@ impl Gossip {
         Gossip{
             config,
             server: None,
-            timer: Builder::default().build::<()>(),
             members: vec!(),
             members_presence: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
+            epoch_duration: Duration::from_secs(5),
             recv_buffer: [0; 64],
             myself
         }
@@ -113,14 +113,14 @@ impl Gossip {
     pub fn join(&mut self, _member: IpAddr) {
         self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)));
         let poll = Poll::new().unwrap();
-        poll.register(&self.timer, Token(11), Ready::readable(), PollOpt::edge()).unwrap();
-        self.reset_protocol_timer();
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
         let mut wait_ack: HashMap<u64, SocketAddr> = HashMap::new();
+        let mut ack_timeouts: BTreeMap<std::time::Instant, u64> = BTreeMap::new();
+        let mut last_epoch_time = std::time::Instant::now();
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
@@ -153,7 +153,6 @@ impl Gossip {
                             // TODO: mark the nodes as suspected first.
                             self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
                             poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
-                            self.reset_protocol_timer();
                         }
                         _ => unreachable!()
                     }
@@ -171,6 +170,7 @@ impl Gossip {
                                 );
                                 self.send_letter(OutgoingLetter { message, target });
                                 wait_ack.insert(sequence_number, target);
+                                ack_timeouts.insert(std::time::Instant::now(), sequence_number);
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
                             }
@@ -191,6 +191,22 @@ impl Gossip {
                     }
                 }
             }
+            let now = std::time::Instant::now();
+            if now > (last_epoch_time + self.epoch_duration) {
+                self.epoch += 1;
+                // TODO: mark the nodes as suspected first.
+                self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
+                poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
+                last_epoch_time = now;
+                info!("New epoch: {}", self.epoch);
+            }
+//            let mut drained: BTreeMap<std::time::Instant, u64>;
+//            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
+//            for (time, sequence_number) in drained {
+//                wait_ack.remove(&sequence_number);
+//            }
+//            ack_timeouts = new_timeouts;
+//            self.check_ack();
         }
     }
 
@@ -210,10 +226,6 @@ impl Gossip {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
         self.server = Some(UdpSocket::bind(&address).unwrap());
         poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
-    }
-
-    fn reset_protocol_timer(&mut self) {
-        self.timer.set_timeout(Duration::from_secs(self.config.protocol_period), ());
     }
 
     fn send_letter(&mut self, letter: OutgoingLetter) {
@@ -258,6 +270,10 @@ impl Gossip {
     }
 
     fn ping_indirect(&mut self) {
+
+    }
+
+    fn check_ack(&mut self) {
 
     }
 }
