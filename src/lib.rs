@@ -180,6 +180,13 @@ impl Gossip {
                         }
                         Token(63) => {
                             // TODO: PingIndirect
+                            let (_, target) = wait_ack.iter().take(1).next().unwrap();
+                            for member in self.members.iter().take(3) {
+                                let mut message = Message::create(MessageType::PingIndirect, sequence_number, self.epoch);
+                                message.with_members(&std::iter::once(target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                self.send_letter(OutgoingLetter{message, target: *member});
+                                sequence_number += 1;
+                            }
                         }
                         _ => unreachable!()
                     }
@@ -227,7 +234,7 @@ impl Gossip {
         poll.register(self.server.as_ref().unwrap(), Token(43), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
     }
 
-    fn send_letter(&mut self, letter: OutgoingLetter) {
+    fn send_letter(&self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
         self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target).unwrap();
     }
