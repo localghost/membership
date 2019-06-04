@@ -1,6 +1,5 @@
 use mio::*;
 use mio::net::*;
-//use mio_extras::timer::*;
 use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
@@ -71,7 +70,6 @@ pub struct Gossip {
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
-    epoch_duration: Duration,
     recv_buffer: [u8; 64],
     myself: SocketAddr,
 }
@@ -104,7 +102,6 @@ impl Gossip {
             members_presence: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
-            epoch_duration: Duration::from_secs(5),
             recv_buffer: [0; 64],
             myself
         }
@@ -148,12 +145,6 @@ impl Gossip {
                                 }
                             }
                         }
-                        Token(11) => {
-                            self.epoch += 1;
-                            // TODO: mark the nodes as suspected first.
-                            self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
-                        }
                         _ => unreachable!()
                     }
                 } else if event.readiness().is_writable() {
@@ -187,12 +178,15 @@ impl Gossip {
                                 poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable(), PollOpt::edge()).unwrap();
                             }
                         }
+                        Token(63) => {
+                            // TODO: PingIndirect
+                        }
                         _ => unreachable!()
                     }
                 }
             }
             let now = std::time::Instant::now();
-            if now > (last_epoch_time + self.epoch_duration) {
+            if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 self.epoch += 1;
                 // TODO: mark the nodes as suspected first.
                 self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
@@ -200,12 +194,17 @@ impl Gossip {
                 last_epoch_time = now;
                 info!("New epoch: {}", self.epoch);
             }
-//            let mut drained: BTreeMap<std::time::Instant, u64>;
-//            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
-//            for (time, sequence_number) in drained {
-//                wait_ack.remove(&sequence_number);
-//            }
-//            ack_timeouts = new_timeouts;
+
+            let mut drained: BTreeMap<std::time::Instant, u64>;
+            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
+            for (time, sequence_number) in drained {
+                if let Some(removed) = wait_ack.remove(&sequence_number) {
+                    // ping indirect
+                    poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
+//                    self.remove_members(std::iter::once(removed));
+                }
+            }
+            ack_timeouts = new_timeouts;
 //            self.check_ack();
         }
     }
