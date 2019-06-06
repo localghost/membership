@@ -63,6 +63,12 @@ impl fmt::Debug for IncomingLetter {
     }
 }
 
+struct Ack {
+    sequence_number: u64,
+    member: SocketAddr,
+    request_time: std::time::Instant,
+}
+
 pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
@@ -115,8 +121,8 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
-        let mut wait_ack: Option<(u64, SocketAddr)> = None;
-        let mut ack_timeouts: BTreeMap<std::time::Instant, u64> = BTreeMap::new();
+        let mut direct_ack: Option<Ack> = None;
+        let mut indirect_ack: Option<Ack> = None;
         let mut last_epoch_time = std::time::Instant::now();
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
@@ -136,10 +142,10 @@ impl Gossip {
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 message::MessageType::PingAck => {
-                                    // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
+                                    // check the key is in `direct_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
-//                                    wait_ack.remove(&letter.message.get_sequence_number());
-                                    wait_ack = None;
+//                                    direct_ack.remove(&letter.message.get_sequence_number());
+                                    direct_ack = None;
                                 }
                                 message::MessageType::PingIndirect => {
 
@@ -154,15 +160,14 @@ impl Gossip {
                             if self.members.len() > 0 {
                                 let target = self.members[self.next_member_index];
 //                                self.send_ping(target, sequence_number);
-                                let mut message = message::Message::create(message::MessageType::Ping, sequence_number, self.epoch);
+                                let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
                                 // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                                 // as that may lead to late failure discovery
                                 message.with_members(
                                     &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                 );
                                 self.send_letter(OutgoingLetter { message, target });
-                                wait_ack = Some((sequence_number, target));
-                                ack_timeouts.insert(std::time::Instant::now(), sequence_number);
+                                direct_ack = Some(Ack{ sequence_number, member: target, request_time: std::time::Instant::now() });
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
                             }
@@ -171,7 +176,7 @@ impl Gossip {
                         Token(53) => {
                             // TODO: confirm pings until WouldBlock
                             if let Some(confirm) = pings_to_confirm.pop_front() {
-                                let mut message = message::Message::create(message::MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                                let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                                 message.with_members(self.members.as_slice());
                                 let letter = OutgoingLetter { message, target: confirm.sender };
                                 self.send_letter(letter);
@@ -181,41 +186,50 @@ impl Gossip {
                         }
                         Token(63) => {
                             // TODO: PingIndirect
-                            if let Some((_, target)) = wait_ack {
+                            if let Some(ref mut ack) = indirect_ack {
                                 for member in self.members.iter().take(3) {
-                                    let mut message = Message::create(MessageType::PingIndirect, sequence_number, self.epoch);
-                                    message.with_members(&std::iter::once(&target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                    let mut message = Message::create(MessageType::PingIndirect, ack.sequence_number, self.epoch);
+                                    message.with_members(&std::iter::once(&ack.member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                     self.send_letter(OutgoingLetter { message, target: *member });
+                                    ack.request_time = std::time::Instant::now();
                                 }
-                                sequence_number += 1;
                             }
                         }
                         _ => unreachable!()
                     }
                 }
             }
+
             let now = std::time::Instant::now();
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 self.epoch += 1;
                 // TODO: mark the nodes as suspected first.
-                if let Some((_, member)) = wait_ack {
-                    self.remove_members(std::iter::once(member));
+                if let Some(ref ack) = indirect_ack {
+                    self.remove_members(std::iter::once(ack.member));
                 }
-                poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
+                indirect_ack = None;
                 last_epoch_time = now;
                 info!("New epoch: {}", self.epoch);
+                poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
             }
 
-            let mut drained: BTreeMap<std::time::Instant, u64>;
-            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
-            for (time, sequence_number) in drained {
-                if let Some((seqnum, target)) = wait_ack {
-                    // ping indirect
+            if let Some(ref ack) = direct_ack {
+                if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
+                    indirect_ack = direct_ack;
+                    direct_ack = None;
                     poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
-//                    self.remove_members(std::iter::once(removed));
                 }
             }
-            ack_timeouts = new_timeouts;
+//            let mut drained: BTreeMap<std::time::Instant, u64>;
+//            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
+//            for (time, sequence_number) in drained {
+//                if let Some((seqnum, target)) = direct_ack {
+//                    // ping indirect
+//                    poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
+////                    self.remove_members(std::iter::once(removed));
+//                }
+//            }
+//            ack_timeouts = new_timeouts;
 //            self.check_ack();
         }
     }
