@@ -115,7 +115,7 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut pings_to_confirm = VecDeque::with_capacity(1024);
-        let mut wait_ack: HashMap<u64, SocketAddr> = HashMap::new();
+        let mut wait_ack: Option<(u64, SocketAddr)> = None;
         let mut ack_timeouts: BTreeMap<std::time::Instant, u64> = BTreeMap::new();
         let mut last_epoch_time = std::time::Instant::now();
         loop {
@@ -138,7 +138,8 @@ impl Gossip {
                                 message::MessageType::PingAck => {
                                     // check the key is in `wait_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
-                                    wait_ack.remove(&letter.message.get_sequence_number());
+//                                    wait_ack.remove(&letter.message.get_sequence_number());
+                                    wait_ack = None;
                                 }
                                 message::MessageType::PingIndirect => {
 
@@ -160,7 +161,7 @@ impl Gossip {
                                     &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                 );
                                 self.send_letter(OutgoingLetter { message, target });
-                                wait_ack.insert(sequence_number, target);
+                                wait_ack = Some((sequence_number, target));
                                 ack_timeouts.insert(std::time::Instant::now(), sequence_number);
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
@@ -180,11 +181,12 @@ impl Gossip {
                         }
                         Token(63) => {
                             // TODO: PingIndirect
-                            let (_, target) = wait_ack.iter().take(1).next().unwrap();
-                            for member in self.members.iter().take(3) {
-                                let mut message = Message::create(MessageType::PingIndirect, sequence_number, self.epoch);
-                                message.with_members(&std::iter::once(target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
-                                self.send_letter(OutgoingLetter{message, target: *member});
+                            if let Some((_, target)) = wait_ack {
+                                for member in self.members.iter().take(3) {
+                                    let mut message = Message::create(MessageType::PingIndirect, sequence_number, self.epoch);
+                                    message.with_members(&std::iter::once(&target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                    self.send_letter(OutgoingLetter { message, target: *member });
+                                }
                                 sequence_number += 1;
                             }
                         }
@@ -196,7 +198,9 @@ impl Gossip {
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 self.epoch += 1;
                 // TODO: mark the nodes as suspected first.
-                self.remove_members(wait_ack.drain().map(|(_, sa)|{sa}));
+                if let Some((_, member)) = wait_ack {
+                    self.remove_members(std::iter::once(member));
+                }
                 poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
                 last_epoch_time = now;
                 info!("New epoch: {}", self.epoch);
@@ -205,7 +209,7 @@ impl Gossip {
             let mut drained: BTreeMap<std::time::Instant, u64>;
             let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
             for (time, sequence_number) in drained {
-                if let Some(removed) = wait_ack.remove(&sequence_number) {
+                if let Some((seqnum, target)) = wait_ack {
                     // ping indirect
                     poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
 //                    self.remove_members(std::iter::once(removed));
