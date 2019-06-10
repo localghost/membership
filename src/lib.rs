@@ -120,10 +120,14 @@ impl Gossip {
 
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
-        let mut pings_to_confirm = VecDeque::with_capacity(1024);
+        let mut direct_pings = VecDeque::with_capacity(1024);
         let mut direct_ack: Option<Ack> = None;
         let mut indirect_ack: Option<Ack> = None;
+        let mut indirect_pings = Vec::with_capacity(1024);
+        let mut indirect_acks = Vec::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
+        let mut acks = Vec::<Ack>::new();
+        let mut new_epoch = false;
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
@@ -138,17 +142,23 @@ impl Gossip {
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
                                 message::MessageType::Ping => {
-                                    pings_to_confirm.push_back(letter);
+                                    direct_pings.push_back(letter);
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 message::MessageType::PingAck => {
                                     // check the key is in `direct_ack`, if it is not the node might have already be marked as failed
                                     // and removed from the cluster
-//                                    direct_ack.remove(&letter.message.get_sequence_number());
+                                    // 1. Check if the ack is in `indirect_acks`
+                                    // 2. Check if it did not time out
+                                    // 3. If it did time out, remove it from `indirect_acks` and `indirect_pings`
+                                    // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
+                                    // 5. Schedule sending `indirect_confirms`
+                                    // 6. Make a single queue of ACKs to send and put it there
                                     direct_ack = None;
                                 }
                                 message::MessageType::PingIndirect => {
-
+                                    indirect_pings.push(letter);
+                                    poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                             }
                         }
@@ -157,7 +167,12 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            if self.members.len() > 0 {
+                            for p in indirect_pings {
+                                let mut message = Message::create(MessageType::Ping, p.message.get_sequence_number(), p.message.get_epoch());
+                                self.send_letter(OutgoingLetter{ message, target: p.message.get_members()[0]});
+                                indirect_acks.push(Ack{member: p.message.get_members()[0], sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now() });
+                            }
+                            if self.members.len() > 0 && new_epoch {
                                 let target = self.members[self.next_member_index];
 //                                self.send_ping(target, sequence_number);
                                 let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
@@ -170,12 +185,13 @@ impl Gossip {
                                 direct_ack = Some(Ack{ sequence_number, member: target, request_time: std::time::Instant::now() });
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
+                                new_epoch = false;
                             }
                             poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                         }
                         Token(53) => {
                             // TODO: confirm pings until WouldBlock
-                            if let Some(confirm) = pings_to_confirm.pop_front() {
+                            if let Some(confirm) = direct_pings.pop_front() {
                                 let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
                                 message.with_members(self.members.as_slice());
                                 let letter = OutgoingLetter { message, target: confirm.sender };
@@ -209,6 +225,7 @@ impl Gossip {
                 }
                 indirect_ack = None;
                 last_epoch_time = now;
+                new_epoch = true;
                 info!("New epoch: {}", self.epoch);
                 poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
             }
