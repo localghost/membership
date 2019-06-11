@@ -64,9 +64,10 @@ impl fmt::Debug for IncomingLetter {
 }
 
 struct Ack {
+    target: SocketAddr,
     sequence_number: u64,
-    member: SocketAddr,
     request_time: std::time::Instant,
+//    origin: Option<SocketAddr>,
 }
 
 pub struct Gossip {
@@ -79,24 +80,6 @@ pub struct Gossip {
     recv_buffer: [u8; 64],
     myself: SocketAddr,
 }
-
-//impl Default for Gossip {
-//    fn default() -> Self {
-//        let config_default = Default::default();
-//        Gossip {
-//            config: config_default,
-//            client: None,
-//            server: None,
-//            timer: Default::default(),
-//            members: Default::default(),
-//            members_presence: Default::default(),
-//            next_member_index: 0,
-//            epoch: 0,
-//            recv_buffer: [0; 64],
-//            myself: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config_default.bind_address).unwrap(), config_default.port))
-//        }
-//    }
-//}
 
 impl Gossip {
     pub fn new(config: ProtocolConfig) -> Gossip {
@@ -134,8 +117,13 @@ impl Gossip {
                 debug!("{:?}", event);
                 if event.readiness().is_readable() {
                     match event.token() {
-                        Token(53) => {
+                        Token(_) => {
                             let letter = self.recv_letter();
+                            if letter.message.get_epoch() != self.epoch {
+                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
+                                continue;
+                            }
+
                             self.join_members(
                                 letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
                             );
@@ -154,7 +142,17 @@ impl Gossip {
                                     // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
                                     // 5. Schedule sending `indirect_confirms`
                                     // 6. Make a single queue of ACKs to send and put it there
-                                    direct_ack = None;
+                                    if let Some(ack) = direct_ack {
+                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
+                                            direct_ack = None;
+                                        }
+                                    } else if let Some(ack) = indirect_ack {
+                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
+                                            indirect_ack = None;
+                                        }
+                                    } else {
+                                        debug!("Not waiting for any ACK, dropping it.");
+                                    }
                                 }
                                 message::MessageType::PingIndirect => {
                                     indirect_pings.push(letter);
@@ -167,10 +165,12 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            for p in indirect_pings {
+                            let pings = indirect_pings.drain(..).collect();
+                            for p in pings {
                                 let mut message = Message::create(MessageType::Ping, p.message.get_sequence_number(), p.message.get_epoch());
                                 self.send_letter(OutgoingLetter{ message, target: p.message.get_members()[0]});
-                                indirect_acks.push(Ack{member: p.message.get_members()[0], sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now() });
+                                acks.push();
+                                indirect_acks.push(Ack { target: p.message.get_members()[0], sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now() });
                             }
                             if self.members.len() > 0 && new_epoch {
                                 let target = self.members[self.next_member_index];
@@ -182,7 +182,7 @@ impl Gossip {
                                     &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                 );
                                 self.send_letter(OutgoingLetter { message, target });
-                                direct_ack = Some(Ack{ sequence_number, member: target, request_time: std::time::Instant::now() });
+                                direct_ack = Some(Ack { sequence_number, target: target, request_time: std::time::Instant::now() });
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                 new_epoch = false;
@@ -205,7 +205,7 @@ impl Gossip {
                             if let Some(ref mut ack) = indirect_ack {
                                 for member in self.members.iter().take(3) {
                                     let mut message = Message::create(MessageType::PingIndirect, ack.sequence_number, self.epoch);
-                                    message.with_members(&std::iter::once(&ack.member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                    message.with_members(&std::iter::once(&ack.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                     self.send_letter(OutgoingLetter { message, target: *member });
                                     ack.request_time = std::time::Instant::now();
                                 }
@@ -221,7 +221,7 @@ impl Gossip {
                 self.epoch += 1;
                 // TODO: mark the nodes as suspected first.
                 if let Some(ref ack) = indirect_ack {
-                    self.remove_members(std::iter::once(ack.member));
+                    self.remove_members(std::iter::once(ack.target));
                 }
                 indirect_ack = None;
                 last_epoch_time = now;
