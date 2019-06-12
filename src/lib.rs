@@ -65,9 +65,17 @@ impl fmt::Debug for IncomingLetter {
 
 struct Ack {
     target: SocketAddr,
+    epoch: u64,
     sequence_number: u64,
     request_time: std::time::Instant,
-//    origin: Option<SocketAddr>,
+    originator: Option<SocketAddr>,
+}
+
+struct Confirmation {
+    target: SocketAddr,
+    epoch: u64,
+    sequence_number: u64,
+    indirect: Option<SocketAddr>
 }
 
 pub struct Gossip {
@@ -103,13 +111,12 @@ impl Gossip {
 
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
-        let mut direct_pings = VecDeque::with_capacity(1024);
         let mut direct_ack: Option<Ack> = None;
         let mut indirect_ack: Option<Ack> = None;
         let mut indirect_pings = Vec::with_capacity(1024);
-        let mut indirect_acks = Vec::with_capacity(1024);
+        let mut indirect_acks = Vec::<Ack>::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
-        let mut acks = Vec::<Ack>::new();
+        let mut acks = Vec::<Confirmation>::new();
         let mut new_epoch = false;
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
@@ -119,10 +126,10 @@ impl Gossip {
                     match event.token() {
                         Token(_) => {
                             let letter = self.recv_letter();
-                            if letter.message.get_epoch() != self.epoch {
-                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
-                                continue;
-                            }
+//                            if letter.message.get_epoch() != self.epoch {
+//                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
+//                                continue;
+//                            }
 
                             self.join_members(
                                 letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
@@ -130,7 +137,7 @@ impl Gossip {
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
                                 message::MessageType::Ping => {
-                                    direct_pings.push_back(letter);
+                                    acks.push(Confirmation{target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number(), indirect: None});
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 message::MessageType::PingAck => {
@@ -142,16 +149,23 @@ impl Gossip {
                                     // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
                                     // 5. Schedule sending `indirect_confirms`
                                     // 6. Make a single queue of ACKs to send and put it there
-                                    if let Some(ack) = direct_ack {
+                                    for ack in indirect_acks.drain(..).collect::<Vec<Ack>>() {
+                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
+                                            acks.push(Confirmation{target: ack.originator.unwrap(), epoch: ack.epoch, sequence_number: ack.sequence_number, indirect: Some(ack.target)})
+                                        } else {
+                                            indirect_acks.push(ack);
+                                        }
+                                    }
+                                    if let Some(ref ack) = direct_ack {
                                         if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                             direct_ack = None;
                                         }
-                                    } else if let Some(ack) = indirect_ack {
+                                    } else if let Some(ref ack) = indirect_ack {
                                         if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                             indirect_ack = None;
                                         }
                                     } else {
-                                        debug!("Not waiting for any ACK, dropping it.");
+                                        debug!("Not waiting for this ACK, dropping it.");
                                     }
                                 }
                                 message::MessageType::PingIndirect => {
@@ -165,12 +179,11 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            let pings = indirect_pings.drain(..).collect();
+                            let pings = indirect_pings.drain(..).collect::<Vec<IncomingLetter>>();
                             for p in pings {
                                 let mut message = Message::create(MessageType::Ping, p.message.get_sequence_number(), p.message.get_epoch());
                                 self.send_letter(OutgoingLetter{ message, target: p.message.get_members()[0]});
-                                acks.push();
-                                indirect_acks.push(Ack { target: p.message.get_members()[0], sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now() });
+                                indirect_acks.push(Ack { target: p.message.get_members()[0], epoch: p.message.get_epoch(), sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now(), originator: Some(p.sender) });
                             }
                             if self.members.len() > 0 && new_epoch {
                                 let target = self.members[self.next_member_index];
@@ -182,7 +195,7 @@ impl Gossip {
                                     &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                 );
                                 self.send_letter(OutgoingLetter { message, target });
-                                direct_ack = Some(Ack { sequence_number, target: target, request_time: std::time::Instant::now() });
+                                direct_ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
                                 sequence_number += 1;
                                 self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                 new_epoch = false;
@@ -191,10 +204,10 @@ impl Gossip {
                         }
                         Token(53) => {
                             // TODO: confirm pings until WouldBlock
-                            if let Some(confirm) = direct_pings.pop_front() {
-                                let mut message = Message::create(MessageType::PingAck, confirm.message.get_sequence_number(), confirm.message.get_epoch());
+                            if let Some(confirm) = acks.pop() {
+                                let mut message = Message::create(MessageType::PingAck, confirm.sequence_number, confirm.epoch);
                                 message.with_members(self.members.as_slice());
-                                let letter = OutgoingLetter { message, target: confirm.sender };
+                                let letter = OutgoingLetter { message, target: confirm.target };
                                 self.send_letter(letter);
                             } else {
                                 poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable(), PollOpt::edge()).unwrap();
