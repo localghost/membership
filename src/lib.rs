@@ -63,6 +63,12 @@ impl fmt::Debug for IncomingLetter {
     }
 }
 
+struct Triple {
+    target: SocketAddr,
+    epoch: u64,
+    sequence_number: u64,
+}
+
 struct Ack {
     target: SocketAddr,
     epoch: u64,
@@ -72,10 +78,47 @@ struct Ack {
 }
 
 struct Confirmation {
+    triple: Triple,
+    indirect: Option<SocketAddr>
+}
+
+struct PingRequest {
     target: SocketAddr,
     epoch: u64,
     sequence_number: u64,
-    indirect: Option<SocketAddr>
+    reply_to: Option<SocketAddr>
+}
+
+struct IndirectPingRequest {
+    triple: Triple,
+    reply_to: SocketAddr
+}
+
+impl Into<IndirectAck> for IndirectPingRequest {
+    fn into(self) -> IndirectAck {
+        IndirectAck {
+            triple: self.triple,
+            reply_to: self.reply_to
+        }
+    }
+}
+
+struct IndirectAck {
+    triple: Triple,
+    reply_to: SocketAddr
+}
+
+impl Into<Confirmation> for IndirectAck {
+    fn into(self) -> Confirmation {
+        Confirmation{
+            triple: Triple {
+                target: self.reply_to,
+                epoch: self.triple.epoch,
+                sequence_number: self.triple.sequence_number,
+            },
+            indirect: Some(self.triple.target)
+        }
+    }
 }
 
 pub struct Gossip {
@@ -113,11 +156,12 @@ impl Gossip {
         let mut sequence_number: u64 = 0;
         let mut direct_ack: Option<Ack> = None;
         let mut indirect_ack: Option<Ack> = None;
-        let mut indirect_pings = Vec::with_capacity(1024);
-        let mut indirect_acks = Vec::<Ack>::with_capacity(1024);
+        let mut indirect_pings = Vec::<IndirectPingRequest>::with_capacity(1024);
+        let mut indirect_acks = Vec::<IndirectAck>::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
         let mut acks = Vec::<Confirmation>::new();
         let mut new_epoch = false;
+        let mut ping_requests = VecDeque::<PingRequest>::new();
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
@@ -137,7 +181,12 @@ impl Gossip {
                             match letter.message.get_type() {
                                 // FIXME: even when switching epochs it should not pause responding to Pings
                                 message::MessageType::Ping => {
-                                    acks.push(Confirmation{target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number(), indirect: None});
+                                    acks.push(Confirmation{
+                                        triple: Triple{
+                                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                        },
+                                        indirect: None
+                                    });
                                     poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                                 message::MessageType::PingAck => {
@@ -149,9 +198,9 @@ impl Gossip {
                                     // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
                                     // 5. Schedule sending `indirect_confirms`
                                     // 6. Make a single queue of ACKs to send and put it there
-                                    for ack in indirect_acks.drain(..).collect::<Vec<Ack>>() {
-                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
-                                            acks.push(Confirmation{target: ack.originator.unwrap(), epoch: ack.epoch, sequence_number: ack.sequence_number, indirect: Some(ack.target)})
+                                    for ack in indirect_acks.drain(..).collect::<Vec<IndirectAck>>() {
+                                        if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                            acks.push(ack.into())
                                         } else {
                                             indirect_acks.push(ack);
                                         }
@@ -169,7 +218,14 @@ impl Gossip {
                                     }
                                 }
                                 message::MessageType::PingIndirect => {
-                                    indirect_pings.push(letter);
+                                    indirect_pings.push(IndirectPingRequest{
+                                        triple: Triple{
+                                            target: letter.message.get_members()[0],
+                                            sequence_number: letter.message.get_sequence_number(),
+                                            epoch: letter.message.get_epoch()
+                                        },
+                                        reply_to: letter.sender
+                                    });
                                     poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
                                 }
                             }
@@ -179,11 +235,10 @@ impl Gossip {
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(43) => {
-                            let pings = indirect_pings.drain(..).collect::<Vec<IncomingLetter>>();
-                            for p in pings {
-                                let mut message = Message::create(MessageType::Ping, p.message.get_sequence_number(), p.message.get_epoch());
-                                self.send_letter(OutgoingLetter{ message, target: p.message.get_members()[0]});
-                                indirect_acks.push(Ack { target: p.message.get_members()[0], epoch: p.message.get_epoch(), sequence_number: p.message.get_sequence_number(), request_time: std::time::Instant::now(), originator: Some(p.sender) });
+                            for p in indirect_pings.drain(..) {
+                                let mut message = Message::create(MessageType::Ping, p.triple.sequence_number, p.triple.epoch);
+                                self.send_letter(OutgoingLetter{ message, target: p.triple.target});
+                                indirect_acks.push(p.into());
                             }
                             if self.members.len() > 0 && new_epoch {
                                 let target = self.members[self.next_member_index];
@@ -205,9 +260,13 @@ impl Gossip {
                         Token(53) => {
                             // TODO: confirm pings until WouldBlock
                             if let Some(confirm) = acks.pop() {
-                                let mut message = Message::create(MessageType::PingAck, confirm.sequence_number, confirm.epoch);
-                                message.with_members(self.members.as_slice());
-                                let letter = OutgoingLetter { message, target: confirm.target };
+                                let mut message = Message::create(MessageType::PingAck, confirm.triple.sequence_number, confirm.triple.epoch);
+                                if let Some(member) = confirm.indirect {
+                                    message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                } else {
+                                    message.with_members(&self.members);
+                                }
+                                let letter = OutgoingLetter { message, target: confirm.triple.target };
                                 self.send_letter(letter);
                             } else {
                                 poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable(), PollOpt::edge()).unwrap();
@@ -240,6 +299,9 @@ impl Gossip {
                 last_epoch_time = now;
                 new_epoch = true;
                 info!("New epoch: {}", self.epoch);
+//                if self.members.len() > 0 {
+//                    ping_requests.push_front(PingRequest { target: self.members});
+//                }
                 poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
             }
 
