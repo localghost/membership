@@ -7,13 +7,14 @@ use std::time::Duration;
 use bytes::{BufMut, Buf, BytesMut};
 use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap, BinaryHeap};
 use std::fmt;
 use log::{debug, info, error};
 use std::default::Default;
 
 mod message;
 use crate::message::{MessageType, Message};
+use std::cmp::Reverse;
 
 #[derive(StructOpt, Default)]
 pub struct ProtocolConfig {
@@ -78,6 +79,12 @@ struct Ack {
     sequence_number: u64,
     request_time: std::time::Instant,
     originator: Option<SocketAddr>,
+}
+
+impl Ord for Ack {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.request_time.cmp(&other.request_time)
+    }
 }
 
 struct Confirmation {
@@ -182,75 +189,70 @@ impl Gossip {
         let mut new_epoch = false;
         let mut ping_requests = VecDeque::<PingRequest>::new();
         let mut requests = VecDeque::<Request>::new();
+        let mut new_acks = BinaryHeap::<Reverse<Ack>>::new();
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
                 debug!("{:?}", event);
                 if event.readiness().is_readable() {
-                    match event.token() {
-                        Token(_) => {
-                            let letter = self.recv_letter();
+                    let letter = self.recv_letter();
 //                            if letter.message.get_epoch() != self.epoch {
 //                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
 //                                continue;
 //                            }
 
-                            self.join_members(
-                                letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
-                            );
-                            match letter.message.get_type() {
-                                // FIXME: even when switching epochs it should not pause responding to Pings
-                                message::MessageType::Ping => {
-                                    acks.push(Confirmation{
-                                        triple: Triple{
-                                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                        },
-                                        indirect: None
-                                    });
-                                    poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
-                                }
-                                message::MessageType::PingAck => {
-                                    // check the key is in `direct_ack`, if it is not the node might have already be marked as failed
-                                    // and removed from the cluster
-                                    // 1. Check if the ack is in `indirect_acks`
-                                    // 2. Check if it did not time out
-                                    // 3. If it did time out, remove it from `indirect_acks` and `indirect_pings`
-                                    // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
-                                    // 5. Schedule sending `indirect_confirms`
-                                    // 6. Make a single queue of ACKs to send and put it there
-                                    for ack in indirect_acks.drain(..).collect::<Vec<IndirectAck>>() {
-                                        if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
-                                            acks.push(ack.into())
-                                        } else {
-                                            indirect_acks.push(ack);
-                                        }
-                                    }
-                                    if let Some(ref ack) = direct_ack {
-                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
-                                            direct_ack = None;
-                                        }
-                                    } else if let Some(ref ack) = indirect_ack {
-                                        if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
-                                            indirect_ack = None;
-                                        }
-                                    } else {
-                                        debug!("Not waiting for this ACK, dropping it.");
-                                    }
-                                }
-                                message::MessageType::PingIndirect => {
-                                    indirect_pings.push(IndirectPingRequest{
-                                        triple: Triple{
-                                            target: letter.message.get_members()[0],
-                                            sequence_number: letter.message.get_sequence_number(),
-                                            epoch: letter.message.get_epoch()
-                                        },
-                                        reply_to: letter.sender
-                                    });
-                                    poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
+                    self.join_members(
+                        letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
+                    );
+                    match letter.message.get_type() {
+                        // FIXME: even when switching epochs it should not pause responding to Pings
+                        message::MessageType::Ping => {
+                            requests.push_back(Request::Confirmation {
+                                triple: Triple{
+                                    target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                },
+                                indirect: None
+                            });
+                        }
+                        message::MessageType::PingAck => {
+                            // check the key is in `direct_ack`, if it is not the node might have already be marked as failed
+                            // and removed from the cluster
+                            // 1. Check if the ack is in `indirect_acks`
+                            // 2. Check if it did not time out
+                            // 3. If it did time out, remove it from `indirect_acks` and `indirect_pings`
+                            // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
+                            // 5. Schedule sending `indirect_confirms`
+                            // 6. Make a single queue of ACKs to send and put it there
+                            for ack in indirect_acks.drain(..).collect::<Vec<IndirectAck>>() {
+                                if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                    acks.push(ack.into())
+                                } else {
+                                    indirect_acks.push(ack);
                                 }
                             }
+                            if let Some(ref ack) = direct_ack {
+                                if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
+                                    direct_ack = None;
+                                }
+                            } else if let Some(ref ack) = indirect_ack {
+                                if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
+                                    indirect_ack = None;
+                                }
+                            } else {
+                                debug!("Not waiting for this ACK, dropping it.");
+                            }
                         }
-                        _ => unreachable!()
+                        message::MessageType::PingIndirect => {
+                            indirect_pings.push(IndirectPingRequest{
+                                triple: Triple{
+                                    target: letter.message.get_members()[0],
+                                    sequence_number: letter.message.get_sequence_number(),
+                                    epoch: letter.message.get_epoch()
+                                },
+                                reply_to: letter.sender
+                            });
+                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
+                        }
                     }
                 } else if event.readiness().is_writable() {
                     match event.token() {
@@ -268,7 +270,8 @@ impl Gossip {
                                                 &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
                                             );
                                             self.send_letter(OutgoingLetter { message, target });
-                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
+//                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
+                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
                                             sequence_number += 1;
                                             self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                         }
@@ -279,13 +282,23 @@ impl Gossip {
                                             message.with_members(&std::iter::once(&request.triple.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                             self.send_letter(OutgoingLetter { message, target: *member });
                                         }
-                                        ack = Some(Ack{
+                                        new_acks.push(Reverse(Ack{
                                             target: request.triple.target,
                                             epoch: request.triple.epoch,
                                             sequence_number: request.triple.sequence_number,
                                             request_time: std::time::Instant::now(),
                                             originator: None
-                                        });
+                                        }));
+                                    },
+                                    Request::Confirmation => {
+                                        let mut message = Message::create(MessageType::PingAck, request.triple.sequence_number, request.triple.epoch);
+                                        if let Some(member) = request.indirect {
+                                            message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                        } else {
+                                            message.with_members(&self.members);
+                                        }
+                                        let letter = OutgoingLetter { message, target: request.triple.target };
+                                        self.send_letter(letter);
                                     }
                                 }
                             }
