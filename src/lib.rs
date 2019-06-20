@@ -87,6 +87,20 @@ impl Ord for Ack {
     }
 }
 
+impl PartialOrd for Ack {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.request_time.partial_cmp(&other.request_time)
+    }
+}
+
+impl Eq for Ack { }
+
+impl PartialEq for Ack {
+    fn eq(&self, other: &Self) -> bool {
+        self.request_time.eq(&other.request_time)
+    }
+}
+
 struct Confirmation {
     triple: Triple,
     indirect: Option<SocketAddr>
@@ -276,28 +290,28 @@ impl Gossip {
                                             self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                         }
                                     }
-                                    Request::IndirectPingRequest => {
+                                    Request::IndirectPingRequest{triple} => {
                                         for member in self.members.iter().take(self.config.num_indirect as usize) {
-                                            let mut message = Message::create(MessageType::PingIndirect, request.triple.sequence_number, request.triple.epoch);
-                                            message.with_members(&std::iter::once(&request.triple.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                            let mut message = Message::create(MessageType::PingIndirect, triple.sequence_number, triple.epoch);
+                                            message.with_members(&std::iter::once(&triple.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                             self.send_letter(OutgoingLetter { message, target: *member });
                                         }
                                         new_acks.push(Reverse(Ack{
-                                            target: request.triple.target,
-                                            epoch: request.triple.epoch,
-                                            sequence_number: request.triple.sequence_number,
+                                            target: triple.target,
+                                            epoch: triple.epoch,
+                                            sequence_number: triple.sequence_number,
                                             request_time: std::time::Instant::now(),
                                             originator: None
                                         }));
                                     },
-                                    Request::Confirmation => {
-                                        let mut message = Message::create(MessageType::PingAck, request.triple.sequence_number, request.triple.epoch);
-                                        if let Some(member) = request.indirect {
+                                    Request::Confirmation{triple, indirect} => {
+                                        let mut message = Message::create(MessageType::PingAck, triple.sequence_number, triple.epoch);
+                                        if let Some(member) = indirect {
                                             message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                         } else {
                                             message.with_members(&self.members);
                                         }
-                                        let letter = OutgoingLetter { message, target: request.triple.target };
+                                        let letter = OutgoingLetter { message, target: triple.target };
                                         self.send_letter(letter);
                                     }
                                 }
