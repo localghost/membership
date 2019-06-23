@@ -78,6 +78,7 @@ struct Ack {
     epoch: u64,
     sequence_number: u64,
     request_time: std::time::Instant,
+    indirect: bool,
     originator: Option<SocketAddr>,
 }
 
@@ -196,7 +197,7 @@ impl Gossip {
         let mut direct_ack: Option<Ack> = None;
         let mut indirect_ack: Option<Ack> = None;
         let mut indirect_pings = Vec::<IndirectPingRequest>::with_capacity(1024);
-        let mut indirect_acks = Vec::<IndirectAck>::with_capacity(1024);
+        let mut indirect_acks = Vec::<Ack>::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
         let mut acks = Vec::<Confirmation>::new();
         let mut ack: Option<Ack> = None;
@@ -204,6 +205,7 @@ impl Gossip {
         let mut ping_requests = VecDeque::<PingRequest>::new();
         let mut requests = VecDeque::<Request>::new();
         let mut new_acks = BinaryHeap::<Reverse<Ack>>::new();
+        let mut acks2 = Vec::<Ack>::new();
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
@@ -219,7 +221,6 @@ impl Gossip {
                         letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
                     );
                     match letter.message.get_type() {
-                        // FIXME: even when switching epochs it should not pause responding to Pings
                         message::MessageType::Ping => {
                             requests.push_back(Request::Confirmation {
                                 triple: Triple{
@@ -229,31 +230,25 @@ impl Gossip {
                             });
                         }
                         message::MessageType::PingAck => {
-                            // check the key is in `direct_ack`, if it is not the node might have already be marked as failed
-                            // and removed from the cluster
-                            // 1. Check if the ack is in `indirect_acks`
-                            // 2. Check if it did not time out
-                            // 3. If it did time out, remove it from `indirect_acks` and `indirect_pings`
-                            // 4. If it did not time out, remove it from `indirect_acks` and move it to `indirect_confirms`
-                            // 5. Schedule sending `indirect_confirms`
-                            // 6. Make a single queue of ACKs to send and put it there
-                            for ack in indirect_acks.drain(..).collect::<Vec<IndirectAck>>() {
-                                if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
-                                    acks.push(ack.into())
+                            for ack in acks2.drain(..).collect::<Vec<Ack>>() {
+                                if ack.indirect {
+                                    if letter.message.get_members()[0] == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                        continue;
+                                    }
                                 } else {
-                                    indirect_acks.push(ack);
+                                    if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                        if let Some(reply_to) = ack.originator {
+                                            requests.push_back(Request::Confirmation {
+                                                triple: Triple{
+                                                    target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                                },
+                                                indirect: Some(letter.sender)
+                                            });
+                                        }
+                                        continue;
+                                    }
                                 }
-                            }
-                            if let Some(ref ack) = direct_ack {
-                                if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
-                                    direct_ack = None;
-                                }
-                            } else if let Some(ref ack) = indirect_ack {
-                                if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
-                                    indirect_ack = None;
-                                }
-                            } else {
-                                debug!("Not waiting for this ACK, dropping it.");
+                                acks2.push(ack);
                             }
                         }
                         message::MessageType::PingIndirect => {
@@ -285,7 +280,8 @@ impl Gossip {
                                             );
                                             self.send_letter(OutgoingLetter { message, target });
 //                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
-                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
+//                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
+                                            acks2.push(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), indirect: false, originator: None });
                                             sequence_number += 1;
                                             self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                         }
@@ -296,14 +292,18 @@ impl Gossip {
                                             message.with_members(&std::iter::once(&triple.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
                                             self.send_letter(OutgoingLetter { message, target: *member });
                                         }
-                                        new_acks.push(Reverse(Ack{
+                                        acks2.push(Ack{
                                             target: triple.target,
                                             epoch: triple.epoch,
                                             sequence_number: triple.sequence_number,
                                             request_time: std::time::Instant::now(),
+                                            indirect: true,
                                             originator: None
-                                        }));
+                                        });
                                     },
+                                    Request::PingForward{triple, replay_to} => {
+
+                                    }
                                     Request::Confirmation{triple, indirect} => {
                                         let mut message = Message::create(MessageType::PingAck, triple.sequence_number, triple.epoch);
                                         if let Some(member) = indirect {
@@ -387,13 +387,16 @@ impl Gossip {
 //                poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
             }
 
-            if let Some(ref ack) = ack {
+            for ack in acks2.drain(..).collect::<Vec<Ack>>() {
                 if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
-                    ack = None;
-                    requests.push_back(Request::IndirectPingRequest {
-                       triple: Triple { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
-                    });
-//                    poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
+                    if !ack.indirect {
+                        requests.push_back(Request::IndirectPingRequest {
+                            triple: Triple { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
+                        });
+                    }
+                }
+                else {
+                    acks2.push(ack);
                 }
             }
 //            let mut drained: BTreeMap<std::time::Instant, u64>;
