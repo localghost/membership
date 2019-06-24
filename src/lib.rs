@@ -15,6 +15,7 @@ use std::default::Default;
 mod message;
 use crate::message::{MessageType, Message};
 use std::cmp::Reverse;
+use std::convert::TryInto;
 
 #[derive(StructOpt, Default)]
 pub struct ProtocolConfig {
@@ -67,6 +68,7 @@ impl fmt::Debug for IncomingLetter {
     }
 }
 
+#[derive(Debug)]
 struct Triple {
     target: SocketAddr,
     epoch: u64,
@@ -146,6 +148,7 @@ impl Into<Confirmation> for IndirectAck {
     }
 }
 
+#[derive(Debug)]
 enum Request {
     Ping,
     IndirectPingRequest  {
@@ -206,17 +209,18 @@ impl Gossip {
         let mut requests = VecDeque::<Request>::new();
         let mut new_acks = BinaryHeap::<Reverse<Ack>>::new();
         let mut acks2 = Vec::<Ack>::new();
+
+        requests.push_back(Request::Ping);
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
-                debug!("{:?}", event);
+//                debug!("{:?}", event);
                 if event.readiness().is_readable() {
                     let letter = self.recv_letter();
 //                            if letter.message.get_epoch() != self.epoch {
 //                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
 //                                continue;
 //                            }
-
                     self.join_members(
                         letter.message.get_members().into_iter().chain(std::iter::once(letter.sender))
                     );
@@ -232,11 +236,11 @@ impl Gossip {
                         message::MessageType::PingAck => {
                             for ack in acks2.drain(..).collect::<Vec<Ack>>() {
                                 if ack.indirect {
-                                    if letter.message.get_members()[0] == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                    if letter.message.get_members()[0] == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                         continue;
                                     }
                                 } else {
-                                    if letter.sender == ack.triple.target && letter.message.get_sequence_number() == ack.triple.sequence_number {
+                                    if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                         if let Some(reply_to) = ack.originator {
                                             requests.push_back(Request::Confirmation {
                                                 triple: Triple{
@@ -252,21 +256,21 @@ impl Gossip {
                             }
                         }
                         message::MessageType::PingIndirect => {
-                            indirect_pings.push(IndirectPingRequest{
+                            requests.push_back(Request::PingForward {
                                 triple: Triple{
                                     target: letter.message.get_members()[0],
                                     sequence_number: letter.message.get_sequence_number(),
                                     epoch: letter.message.get_epoch()
                                 },
                                 reply_to: letter.sender
-                            });
-                            poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
+                            })
                         }
                     }
                 } else if event.readiness().is_writable() {
                     match event.token() {
                         Token(_) => {
                             while let Some(request) = requests.pop_front() {
+                                debug!("{:?}", request);
                                 match request {
                                     Request::Ping => {
                                         if self.members.len() > 0 {
@@ -301,8 +305,11 @@ impl Gossip {
                                             originator: None
                                         });
                                     },
-                                    Request::PingForward{triple, replay_to} => {
-
+                                    Request::PingForward{triple, reply_to} => {
+                                        let mut message = Message::create(MessageType::Ping, triple.sequence_number, triple.epoch);
+//                                        message.with_members()
+                                        self.send_letter(OutgoingLetter{ message, target: triple.target });
+                                        acks2.push(Ack { sequence_number: triple.sequence_number, epoch: triple.epoch, target: triple.target, request_time: std::time::Instant::now(), indirect: false, originator: Some(reply_to) });
                                     }
                                     Request::Confirmation{triple, indirect} => {
                                         let mut message = Message::create(MessageType::PingAck, triple.sequence_number, triple.epoch);
@@ -317,55 +324,6 @@ impl Gossip {
                                 }
                             }
                         }
-                        Token(43) => {
-                            for p in indirect_pings.drain(..) {
-                                let mut message = Message::create(MessageType::Ping, p.triple.sequence_number, p.triple.epoch);
-                                self.send_letter(OutgoingLetter{ message, target: p.triple.target});
-                                indirect_acks.push(p.into());
-                            }
-                            if self.members.len() > 0 && new_epoch {
-                                let target = self.members[self.next_member_index];
-//                                self.send_ping(target, sequence_number);
-                                let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
-                                // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                                // as that may lead to late failure discovery
-                                message.with_members(
-                                    &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
-                                );
-                                self.send_letter(OutgoingLetter { message, target });
-                                direct_ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
-                                sequence_number += 1;
-                                self.next_member_index = (self.next_member_index + 1) % self.members.len();
-                                new_epoch = false;
-                            }
-                            poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable()|Ready::writable(), PollOpt::edge()).unwrap();
-                        }
-                        Token(53) => {
-                            // TODO: confirm pings until WouldBlock
-                            if let Some(confirm) = acks.pop() {
-                                let mut message = Message::create(MessageType::PingAck, confirm.triple.sequence_number, confirm.triple.epoch);
-                                if let Some(member) = confirm.indirect {
-                                    message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
-                                } else {
-                                    message.with_members(&self.members);
-                                }
-                                let letter = OutgoingLetter { message, target: confirm.triple.target };
-                                self.send_letter(letter);
-                            } else {
-                                poll.reregister(self.server.as_ref().unwrap(), Token(53), Ready::readable(), PollOpt::edge()).unwrap();
-                            }
-                        }
-                        Token(63) => {
-                            if let Some(ref mut ack) = indirect_ack {
-                                for member in self.members.iter().take(3) {
-                                    let mut message = Message::create(MessageType::PingIndirect, ack.sequence_number, self.epoch);
-                                    message.with_members(&std::iter::once(&ack.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
-                                    self.send_letter(OutgoingLetter { message, target: *member });
-                                    ack.request_time = std::time::Instant::now();
-                                }
-                            }
-                        }
-                        _ => unreachable!()
                     }
                 }
             }
@@ -393,6 +351,9 @@ impl Gossip {
                         requests.push_back(Request::IndirectPingRequest {
                             triple: Triple { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
                         });
+                    } else {
+                        self.remove_members(std::iter::once(ack.target));
+                        // TODO: mark the member as failed
                     }
                 }
                 else {
@@ -428,7 +389,7 @@ impl Gossip {
     fn bind(&mut self, poll: &Poll) {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
         self.server = Some(UdpSocket::bind(&address).unwrap());
-        poll.register(self.server.as_ref().unwrap(), Token(0), Ready::readable() | Ready::writable(), PollOpt::edge()).unwrap();
+        poll.register(self.server.as_ref().unwrap(), Token(0), Ready::readable() | Ready::writable(), PollOpt::level()).unwrap();
     }
 
     fn send_letter(&self, letter: OutgoingLetter) {
