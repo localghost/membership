@@ -69,7 +69,7 @@ impl fmt::Debug for IncomingLetter {
 }
 
 #[derive(Debug)]
-struct Triple {
+struct Header {
     target: SocketAddr,
     epoch: u64,
     sequence_number: u64,
@@ -82,6 +82,11 @@ struct Ack {
     request_time: std::time::Instant,
     indirect: bool,
     originator: Option<SocketAddr>,
+}
+
+struct Ack2 {
+    request: Request,
+    request_time: std::time::Instant
 }
 
 impl Ord for Ack {
@@ -104,64 +109,13 @@ impl PartialEq for Ack {
     }
 }
 
-struct Confirmation {
-    triple: Triple,
-    indirect: Option<SocketAddr>
-}
-
-struct PingRequest {
-    target: SocketAddr,
-    epoch: u64,
-    sequence_number: u64,
-    reply_to: Option<SocketAddr>
-}
-
-struct IndirectPingRequest {
-    triple: Triple,
-    reply_to: SocketAddr
-}
-
-impl Into<IndirectAck> for IndirectPingRequest {
-    fn into(self) -> IndirectAck {
-        IndirectAck {
-            triple: self.triple,
-            reply_to: self.reply_to
-        }
-    }
-}
-
-struct IndirectAck {
-    triple: Triple,
-    reply_to: SocketAddr
-}
-
-impl Into<Confirmation> for IndirectAck {
-    fn into(self) -> Confirmation {
-        Confirmation{
-            triple: Triple {
-                target: self.reply_to,
-                epoch: self.triple.epoch,
-                sequence_number: self.triple.sequence_number,
-            },
-            indirect: Some(self.triple.target)
-        }
-    }
-}
-
 #[derive(Debug)]
 enum Request {
     Ping,
-    IndirectPingRequest  {
-        triple: Triple,
-    },
-    PingForward {
-        triple: Triple,
-        reply_to: SocketAddr,
-    },
-    Confirmation {
-        triple: Triple,
-        indirect: Option<SocketAddr>
-    }
+    PingIndirect(Header),
+    PingProxy(Header, SocketAddr),
+    Ack(Header),
+    AckIndirect(Header, SocketAddr)
 }
 
 pub struct Gossip {
@@ -197,18 +151,10 @@ impl Gossip {
 
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
-        let mut direct_ack: Option<Ack> = None;
-        let mut indirect_ack: Option<Ack> = None;
-        let mut indirect_pings = Vec::<IndirectPingRequest>::with_capacity(1024);
-        let mut indirect_acks = Vec::<Ack>::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
-        let mut acks = Vec::<Confirmation>::new();
-        let mut ack: Option<Ack> = None;
         let mut new_epoch = false;
-        let mut ping_requests = VecDeque::<PingRequest>::new();
         let mut requests = VecDeque::<Request>::new();
-        let mut new_acks = BinaryHeap::<Reverse<Ack>>::new();
-        let mut acks2 = Vec::<Ack>::new();
+        let mut acks = Vec::<Ack>::new();
 
         requests.push_back(Request::Ping);
         loop {
@@ -226,15 +172,14 @@ impl Gossip {
                     );
                     match letter.message.get_type() {
                         message::MessageType::Ping => {
-                            requests.push_back(Request::Confirmation {
-                                triple: Triple{
+                            requests.push_back(Request::Ack(
+                                Header {
                                     target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
                                 },
-                                indirect: None
-                            });
+                            ));
                         }
                         message::MessageType::PingAck => {
-                            for ack in acks2.drain(..).collect::<Vec<Ack>>() {
+                            for ack in acks.drain(..).collect::<Vec<Ack>>() {
                                 if ack.indirect {
                                     if letter.message.get_members()[0] == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                         continue;
@@ -242,86 +187,82 @@ impl Gossip {
                                 } else {
                                     if letter.sender == ack.target && letter.message.get_sequence_number() == ack.sequence_number {
                                         if let Some(reply_to) = ack.originator {
-                                            requests.push_back(Request::Confirmation {
-                                                triple: Triple{
-                                                    target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                                },
-                                                indirect: Some(letter.sender)
-                                            });
+                                            requests.push_back(Request::AckIndirect(
+                                               Header {
+                                                   target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                               },
+                                               letter.sender
+                                            ));
                                         }
                                         continue;
                                     }
                                 }
-                                acks2.push(ack);
+                                acks.push(ack);
                             }
                         }
                         message::MessageType::PingIndirect => {
-                            requests.push_back(Request::PingForward {
-                                triple: Triple{
+                            requests.push_back(Request::PingProxy(
+                                Header {
                                     target: letter.message.get_members()[0],
                                     sequence_number: letter.message.get_sequence_number(),
                                     epoch: letter.message.get_epoch()
                                 },
-                                reply_to: letter.sender
-                            })
+                                letter.sender
+                            ))
                         }
                     }
                 } else if event.readiness().is_writable() {
-                    match event.token() {
-                        Token(_) => {
-                            while let Some(request) = requests.pop_front() {
-                                debug!("{:?}", request);
-                                match request {
-                                    Request::Ping => {
-                                        if self.members.len() > 0 {
-                                            let target = self.members[self.next_member_index];
+                    if let Some(request) = requests.pop_front() {
+                        debug!("{:?}", request);
+                        match request {
+                            Request::Ping => {
+                                if self.members.len() > 0 {
+                                    let target = self.members[self.next_member_index];
 //                                self.send_ping(target, sequence_number);
-                                            let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
-                                            // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                                            // as that may lead to late failure discovery
-                                            message.with_members(
-                                                &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
-                                            );
-                                            self.send_letter(OutgoingLetter { message, target });
+                                    let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
+                                    // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                                    // as that may lead to late failure discovery
+                                    message.with_members(
+                                        &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>()
+                                    );
+                                    self.send_letter(OutgoingLetter { message, target });
 //                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
 //                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
-                                            acks2.push(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), indirect: false, originator: None });
-                                            sequence_number += 1;
-                                            self.next_member_index = (self.next_member_index + 1) % self.members.len();
-                                        }
-                                    }
-                                    Request::IndirectPingRequest{triple} => {
-                                        for member in self.members.iter().take(self.config.num_indirect as usize) {
-                                            let mut message = Message::create(MessageType::PingIndirect, triple.sequence_number, triple.epoch);
-                                            message.with_members(&std::iter::once(&triple.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
-                                            self.send_letter(OutgoingLetter { message, target: *member });
-                                        }
-                                        acks2.push(Ack{
-                                            target: triple.target,
-                                            epoch: triple.epoch,
-                                            sequence_number: triple.sequence_number,
-                                            request_time: std::time::Instant::now(),
-                                            indirect: true,
-                                            originator: None
-                                        });
-                                    },
-                                    Request::PingForward{triple, reply_to} => {
-                                        let mut message = Message::create(MessageType::Ping, triple.sequence_number, triple.epoch);
-//                                        message.with_members()
-                                        self.send_letter(OutgoingLetter{ message, target: triple.target });
-                                        acks2.push(Ack { sequence_number: triple.sequence_number, epoch: triple.epoch, target: triple.target, request_time: std::time::Instant::now(), indirect: false, originator: Some(reply_to) });
-                                    }
-                                    Request::Confirmation{triple, indirect} => {
-                                        let mut message = Message::create(MessageType::PingAck, triple.sequence_number, triple.epoch);
-                                        if let Some(member) = indirect {
-                                            message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
-                                        } else {
-                                            message.with_members(&self.members);
-                                        }
-                                        let letter = OutgoingLetter { message, target: triple.target };
-                                        self.send_letter(letter);
-                                    }
+                                    acks.push(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), indirect: false, originator: None });
+                                    sequence_number += 1;
+                                    self.next_member_index = (self.next_member_index + 1) % self.members.len();
                                 }
+                            }
+                            Request::PingIndirect(header) => {
+                                for member in self.members.iter().take(self.config.num_indirect as usize) {
+                                    let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                                    message.with_members(&std::iter::once(&header.target).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                    self.send_letter(OutgoingLetter { message, target: *member });
+                                }
+                                acks.push(Ack{
+                                    target: header.target,
+                                    epoch: header.epoch,
+                                    sequence_number: header.sequence_number,
+                                    request_time: std::time::Instant::now(),
+                                    indirect: true,
+                                    originator: None
+                                });
+                            },
+                            Request::PingProxy(header, reply_to) => {
+                                let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+//                                        message.with_members()
+                                self.send_letter(OutgoingLetter{ message, target: header.target });
+                                acks.push(Ack { sequence_number: header.sequence_number, epoch: header.epoch, target: header.target, request_time: std::time::Instant::now(), indirect: false, originator: Some(reply_to) });
+                            }
+                            Request::Ack(header) => {
+                                let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                                message.with_members(&self.members);
+                                self.send_letter(OutgoingLetter { message, target: header.target });
+                            }
+                            Request::AckIndirect(header, member) => {
+                                let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                                message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>());
+                                self.send_letter(OutgoingLetter { message, target: header.target });
                             }
                         }
                     }
@@ -329,62 +270,31 @@ impl Gossip {
             }
 
             let now = std::time::Instant::now();
-            if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
-                self.epoch += 1;
-                // TODO: mark the nodes as suspected first.
-                if let Some(ref ack) = indirect_ack {
-                    self.remove_members(std::iter::once(ack.target));
-                }
-                indirect_ack = None;
-                last_epoch_time = now;
-                requests.push_front(Request::Ping);
-                info!("New epoch: {}", self.epoch);
-//                if self.members.len() > 0 {
-//                    ping_requests.push_front(PingRequest { target: self.members});
-//                }
-//                poll.reregister(self.server.as_ref().unwrap(), Token(43), Ready::writable(), PollOpt::edge()).unwrap();
-            }
 
-            for ack in acks2.drain(..).collect::<Vec<Ack>>() {
+            for ack in acks.drain(..).collect::<Vec<Ack>>() {
                 if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
                     if !ack.indirect {
-                        requests.push_back(Request::IndirectPingRequest {
-                            triple: Triple { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
-                        });
+                        requests.push_back(Request::PingIndirect(
+                            Header { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
+                        ));
                     } else {
                         self.remove_members(std::iter::once(ack.target));
-                        // TODO: mark the member as failed
+                        // TODO: mark the member as suspected
                     }
                 }
                 else {
-                    acks2.push(ack);
+                    acks.push(ack);
                 }
             }
-//            let mut drained: BTreeMap<std::time::Instant, u64>;
-//            let (drained, new_timeouts): (BTreeMap<std::time::Instant, u64>, BTreeMap<std::time::Instant, u64>) = ack_timeouts.into_iter().partition(|(t, _)| {now > (*t + Duration::from_secs(self.config.ack_timeout as u64))});
-//            for (time, sequence_number) in drained {
-//                if let Some((seqnum, target)) = direct_ack {
-//                    // ping indirect
-//                    poll.reregister(self.server.as_ref().unwrap(), Token(63), Ready::writable(), PollOpt::edge()).unwrap();
-////                    self.remove_members(std::iter::once(removed));
-//                }
-//            }
-//            ack_timeouts = new_timeouts;
-//            self.check_ack();
+
+            if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
+                self.epoch += 1;
+                info!("New epoch: {}", self.epoch);
+                last_epoch_time = now;
+                requests.push_front(Request::Ping);
+            }
         }
     }
-
-//    fn send_ping(&mut self, target: SocketAddr, sequence_number: u64) {
-//        let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
-//        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-//        // as that may lead to late failure discovery
-//        let member_index = self.members.iter().position(|x| { *x == target}).unwrap();
-//        message.with_members(
-//            &self.members.iter().skip(member_index).chain(self.members.iter().take(member_index)).cloned().collect::<Vec<_>>()
-//        );
-//        self.send_letter(OutgoingLetter { message, target });
-////        wait_ack.insert(sequence_number, target);
-//    }
 
     fn bind(&mut self, poll: &Poll) {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
@@ -427,18 +337,6 @@ impl Gossip {
                 info!("Member removed: {:?}", member);
             }
         }
-    }
-
-    fn increment_epoch(&mut self) {
-        //
-    }
-
-    fn ping_indirect(&mut self) {
-
-    }
-
-    fn check_ack(&mut self) {
-
     }
 }
 
