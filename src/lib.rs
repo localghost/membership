@@ -122,6 +122,7 @@ pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
+    removed_members: Vec<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
@@ -136,6 +137,7 @@ impl Gossip {
             config,
             server: None,
             members: vec!(),
+            removed_members: vec!(),
             members_presence: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
@@ -330,7 +332,7 @@ impl Gossip {
         for member in members {
             if self.members_presence.remove(&member) {
                 let idx = self.members.iter().position(|e| { *e == member }).unwrap();
-                self.members.remove(idx);
+                self.removed_members.push(self.members.remove(idx));
                 if idx <= self.next_member_index && self.next_member_index > 0 {
                     self.next_member_index -= 1;
                 }

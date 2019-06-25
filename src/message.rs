@@ -2,6 +2,8 @@ use bytes::{BufMut, Buf, BytesMut};
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::io::Cursor;
 use std::fmt;
+use log::{debug, info, error};
+
 
 #[derive(Debug)]
 pub(super) enum MessageType {
@@ -25,6 +27,7 @@ impl Message {
 
     pub(super) fn with_members(&mut self, members: &[SocketAddr]) -> usize {
         // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
+        let header_position = self.buffer.len();
         self.buffer.resize(self.buffer.len()+1, 0u8); // leave a byte for header
         let mut header = 0u8;
         let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
@@ -34,13 +37,14 @@ impl Message {
                     self.buffer.put_slice(&(ip.octets()))
                 }
                 IpAddr::V6(_ip) => {
+                    // TODO: support serializing v6
                     self.buffer.put_u8(1);
                     header |= 1 << idx;
                 }
             }
         }
         header |= 1 << count;
-        *self.buffer.iter_mut().skip(20).next().unwrap() = header;
+        *self.buffer.iter_mut().skip(header_position).next().unwrap() = header;
         count
     }
 
