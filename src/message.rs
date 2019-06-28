@@ -126,3 +126,24 @@ impl fmt::Debug for Message {
         )
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn create_message() {
+        let message = Message::create(MessageType::Ping, 1, 2);
+//        assert_eq!(MessageType::Ping, message.get_type());
+        assert_eq!(1, message.get_sequence_number());
+        assert_eq!(2, message.get_epoch());
+    }
+
+    #[test]
+    fn with_members() {
+        let mut message = Message::create(MessageType::Ping, 1, 2);
+        message.with_members(&[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
+        assert_eq!(SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()), message.get_members()[0]);
+    }
+}
