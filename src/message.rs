@@ -5,7 +5,7 @@ use std::fmt;
 use log::{debug, info, error};
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(super) enum MessageType {
     Ping,
     PingAck,
@@ -32,13 +32,13 @@ impl Message {
         let mut header = 0u8;
         let count = std::cmp::min(members.len(), std::mem::size_of_val(&header)*8-1);
         for idx in 0..count {
-            match members[idx].ip() {
-                IpAddr::V4(ip) => {
-                    self.buffer.put_slice(&(ip.octets()))
+            match members[idx] {
+                SocketAddr::V4(sa) => {
+                    self.buffer.put_slice(&(sa.ip().octets()));
+                    self.buffer.put_u16_be(sa.port());
                 }
-                IpAddr::V6(_ip) => {
-                    // TODO: support serializing v6
-                    self.buffer.put_u8(1);
+                SocketAddr::V6(_sa) => {
+                    panic!("IPv6 is not implemented yet.");
                     header |= 1 << idx;
                 }
             }
@@ -85,10 +85,10 @@ impl Message {
         let mut result = Vec::with_capacity(count as usize);
         for idx in 0..count {
             if (header & 1) == 0 {
-                result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), 2345));
+                result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), cursor.get_u16_be()));
             }
             else {
-                // IPv6
+                panic!("IPv6 is not implemented yet.");
             }
             header >> 1;
         }
@@ -105,12 +105,6 @@ impl Message {
         cursor
     }
 }
-
-//impl<T: AsRef<[u8]>> From<T> for Message {
-//    fn from(src: T) -> Self {
-//        Message{ buffer: bytes::BytesMut::from(src.as_ref()) }
-//    }
-//}
 
 impl From<&[u8; 64]> for  Message {
     fn from(src: &[u8; 64]) -> Self {
@@ -135,15 +129,15 @@ mod test {
     #[test]
     fn create_message() {
         let message = Message::create(MessageType::Ping, 1, 2);
-//        assert_eq!(MessageType::Ping, message.get_type());
-        assert_eq!(1, message.get_sequence_number());
-        assert_eq!(2, message.get_epoch());
+        assert_eq!(message.get_type(), MessageType::Ping);
+        assert_eq!(message.get_sequence_number(), 1);
+        assert_eq!(message.get_epoch(), 2);
     }
 
     #[test]
     fn with_members() {
         let mut message = Message::create(MessageType::Ping, 1, 2);
         message.with_members(&[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
-        assert_eq!(SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()), message.get_members()[0]);
+        assert_eq!(message.get_members()[0], SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()));
     }
 }
