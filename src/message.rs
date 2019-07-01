@@ -25,7 +25,13 @@ impl Message {
         message
     }
 
-    pub(super) fn with_members(&mut self, members: &[SocketAddr]) -> usize {
+    pub(super) fn with_members(&mut self, alive: &[SocketAddr], dead: &[SocketAddr]) -> (usize, usize) {
+        let countAlive = self.add_members(alive);
+        let countDead = self.add_members(dead);
+        (countAlive, countDead)
+    }
+
+    fn add_members(&mut self, members: &[SocketAddr]) -> usize {
         // 00101001 -> 5 addresses (highest 1 defines when the address types start): v4, v6, v4, v4, v6
         let header_position = self.buffer.len();
         self.buffer.resize(self.buffer.len()+1, 0u8); // leave a byte for header
@@ -76,11 +82,20 @@ impl Message {
         ).get_u64_be()
     }
 
-    pub(super) fn get_members(&self) -> Vec<SocketAddr> {
-        let mut cursor = self.get_cursor_into_buffer(
-            (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64
-        );
+    pub(super) fn get_alive_members(&self) -> Vec<SocketAddr> {
+        self.get_members((std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64)
+    }
+
+    pub(super) fn get_dead_members(&self) -> Vec<SocketAddr> {
+        let alive_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64;
+        let position = alive_position + std::mem::size_of::<u8>() as u64 + self.count_members_bytes(alive_position);
+        self.get_members(position)
+    }
+
+    pub(super) fn get_members(&self, position: u64) -> Vec<SocketAddr> {
+        let mut cursor = self.get_cursor_into_buffer(position);
         let header = cursor.get_u8();
+        println!("zeros {}", header.leading_zeros());
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result = Vec::with_capacity(count as usize);
         for idx in 0..count {
@@ -93,6 +108,21 @@ impl Message {
             header >> 1;
         }
         result
+    }
+
+    fn count_members_bytes(&self, position: u64) -> u64 {
+        let mut cursor = self.get_cursor_into_buffer(position);
+        let header = cursor.get_u8();
+        let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
+        let mut result: usize = 0;
+        for _ in 0..count {
+            if (header & 1) == 0 {
+                result += std::mem::size_of::<u32>() + std::mem::size_of::<u16>();
+            } else {
+                panic!("IPv6 is not implemented yet.")
+            }
+        }
+        result as u64
     }
 
     pub(super) fn into_inner(self) -> BytesMut {
@@ -115,8 +145,8 @@ impl From<&[u8; 64]> for  Message {
 impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
-               "Message {{ type: {:?}, epoch: {}, sequence_number: {}, members: {:?} }}",
-               self.get_type(), self.get_epoch(), self.get_sequence_number(), self.get_members()
+               "Message {{ type: {:?}, epoch: {}, sequence_number: {}, alive: {:?}, dead: {:?} }}",
+               self.get_type(), self.get_epoch(), self.get_sequence_number(), self.get_alive_members(), self.get_dead_members()
         )
     }
 }
@@ -135,9 +165,41 @@ mod test {
     }
 
     #[test]
-    fn with_members() {
+    fn add_members() {
         let mut message = Message::create(MessageType::Ping, 1, 2);
-        message.with_members(&[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
-        assert_eq!(message.get_members()[0], SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()));
+
+        message.with_members(&[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())], &[]);
+        assert_eq!(message.get_alive_members(), [SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
+        assert_eq!(message.get_dead_members(), []);
+
+        let mut message = Message::create(MessageType::Ping, 1, 2);
+        message.with_members(&[], &[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
+        assert_eq!(message.get_alive_members(), []);
+        assert_eq!(message.get_dead_members(), [SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
+
+        let mut message = Message::create(MessageType::Ping, 1, 2);
+        message.with_members(
+            &[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())],
+            &[SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())]
+        );
+        assert_eq!(message.get_alive_members(), [SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
+        assert_eq!(message.get_dead_members(), [SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())]);
+
+        let mut message = Message::create(MessageType::Ping, 1, 2);
+        message.with_members(
+            &[
+                SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()),
+                SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())
+            ],
+            &[]
+        );
+        assert_eq!(
+            message.get_alive_members(),
+            [
+                SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()),
+                SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())
+            ]
+        );
+        assert_eq!(message.get_dead_members(), []);
     }
 }
