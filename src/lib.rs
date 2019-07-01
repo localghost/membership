@@ -13,6 +13,7 @@ use log::{debug, info, error};
 use std::default::Default;
 
 mod message;
+mod circular_buffer;
 use crate::message::{MessageType, Message};
 use std::cmp::Reverse;
 use std::convert::TryInto;
