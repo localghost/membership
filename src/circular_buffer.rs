@@ -5,6 +5,7 @@ pub struct CircularBuffer<T> {
     size: usize,
 }
 
+// FIXME not the most effective implementation, using a list might be more effective
 impl<T> CircularBuffer<T> {
     pub fn new(size: usize) -> Self {
         CircularBuffer{

@@ -331,6 +331,7 @@ impl Gossip {
                 info!("Member joined: {:?}", member);
                 self.members.push(member);
             }
+            self.dead_members.remove(member);
         }
     }
 
