@@ -12,7 +12,8 @@ impl<T> CircularBuffer<T> {
         }
     }
 
-    pub fn push(&mut self, el: T) {
+    pub fn push(&mut self, el: T) where T: PartialEq {
+        self.remove(&el);
         self.buffer.insert(0, el);
         self.buffer.truncate(self.size);
     }
@@ -62,6 +63,9 @@ mod test {
         buffer.push(3);
         assert_eq!(buffer.len(), 3);
         assert_eq!(as_vec(&buffer), [3,2,1]);
+
+        buffer.push(2);
+        assert_eq!(as_vec(&buffer), [2,3,1]);
     }
 
     #[test]

@@ -144,7 +144,7 @@ impl Gossip {
     }
 
     pub fn join(&mut self, _member: IpAddr) {
-        self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)));
+        self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
         let poll = Poll::new().unwrap();
         self.bind(&poll);
 
@@ -166,7 +166,8 @@ impl Gossip {
 //                                continue;
 //                            }
                     self.join_members(
-                        letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender))
+                        letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
+                        letter.message.get_dead_members().into_iter()
                     );
                     match letter.message.get_type() {
                         message::MessageType::Ping => {
@@ -280,7 +281,7 @@ impl Gossip {
                             Header { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
                         ));
                     } else {
-                        self.remove_members(std::iter::once(ack.target));
+                        self.kill_members(std::iter::once(ack.target));
                         // TODO: mark the member as suspected
                     }
                 }
@@ -316,8 +317,11 @@ impl Gossip {
         letter
     }
 
-    fn join_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
-        for member in members {
+    fn join_members<T1, T2>(&mut self, alive: T1, dead: T2)
+        where T1: Iterator<Item=SocketAddr>, T2: Iterator<Item=SocketAddr>
+    {
+        self.remove_members2(dead);
+        for member in alive {
             if member == self.myself {
                 continue;
             }
@@ -331,15 +335,32 @@ impl Gossip {
         }
     }
 
-    fn remove_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
+    fn kill_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
+        for member in members {
+            self.dead_members.push(member);
+        }
+//        members.cloned().map(|member|{ self.dead_members.push(member)});
+        self.remove_members2(members);
+//        self.dead_members.append(members);
+//        for member in members {
+//            if self.members_presence.remove(&member) {
+//                let idx = self.members.iter().position(|e| { *e == member }).unwrap();
+//                self.dead_members.push(self.members.remove(idx));
+//                if idx <= self.next_member_index && self.next_member_index > 0 {
+//                    self.next_member_index -= 1;
+//                }
+//                info!("Member removed: {:?}", member);
+//            }
+//        }
+    }
+
+    fn remove_members2<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
         for member in members {
             if self.members_presence.remove(&member) {
                 let idx = self.members.iter().position(|e| { *e == member }).unwrap();
-                self.dead_members.push(self.members.remove(idx));
                 if idx <= self.next_member_index && self.next_member_index > 0 {
                     self.next_member_index -= 1;
                 }
-                self.dead_members.push(member);
                 info!("Member removed: {:?}", member);
             }
         }
