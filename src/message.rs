@@ -95,7 +95,6 @@ impl Message {
     pub(super) fn get_members(&self, position: u64) -> Vec<SocketAddr> {
         let mut cursor = self.get_cursor_into_buffer(position);
         let header = cursor.get_u8();
-        println!("zeros {}", header.leading_zeros());
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result = Vec::with_capacity(count as usize);
         for idx in 0..count {

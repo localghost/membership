@@ -228,7 +228,7 @@ impl Gossip {
                                     // as that may lead to late failure discovery
                                     message.with_members(
                                         &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>(),
-                                        &[]
+                                        &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                     );
                                     self.send_letter(OutgoingLetter { message, target });
 //                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
@@ -241,7 +241,10 @@ impl Gossip {
                             Request::PingIndirect(header) => {
                                 for member in self.members.iter().take(self.config.num_indirect as usize) {
                                     let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
-                                    message.with_members(&std::iter::once(&header.target).chain(self.members.iter()).cloned().collect::<Vec<_>>(), &[]);
+                                    message.with_members(
+                                        &std::iter::once(&header.target).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
+                                        &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                    );
                                     self.send_letter(OutgoingLetter { message, target: *member });
                                 }
                                 acks.push(Ack{
@@ -261,12 +264,12 @@ impl Gossip {
                             }
                             Request::Ack(header) => {
                                 let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                message.with_members(&self.members, &[]);
+                                message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
                                 self.send_letter(OutgoingLetter { message, target: header.target });
                             }
                             Request::AckIndirect(header, member) => {
                                 let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(), &[]);
+                                message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(), &self.dead_members.iter().cloned().collect::<Vec<_>>());
                                 self.send_letter(OutgoingLetter { message, target: header.target });
                             }
                         }
@@ -339,6 +342,7 @@ impl Gossip {
                 if idx <= self.next_member_index && self.next_member_index > 0 {
                     self.next_member_index -= 1;
                 }
+                self.dead_members.push(member);
                 info!("Member removed: {:?}", member);
             }
         }
