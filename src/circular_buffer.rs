@@ -1,11 +1,9 @@
-use std::slice::Iter;
-
 pub struct CircularBuffer<T> {
     buffer: Vec<T>,
     size: usize,
 }
 
-// FIXME not the most effective implementation, using a list might be more effective
+// FIXME not the most effective implementation, consider using a list or research for a better data structure
 impl<T> CircularBuffer<T> {
     pub fn new(size: usize) -> Self {
         CircularBuffer{
@@ -19,13 +17,14 @@ impl<T> CircularBuffer<T> {
         self.buffer.truncate(self.size);
     }
 
-    pub fn remove(&mut self, el: &T) where T: PartialEq {
-        let indices = self.buffer.iter().enumerate().filter(|&(idx, e)| {*e == *el}).map(|(idx, _)|{idx}).collect::<Vec<_>>();
+    pub fn remove(&mut self, el: &T) -> usize where T: PartialEq {
+        let indices = self.buffer.iter().enumerate().filter(|&(_, e)| {*e == *el}).map(|(idx, _)|{idx}).collect::<Vec<_>>();
         let mut round: usize = 0;
-        for idx in indices {
+        for idx in &indices {
             self.buffer.remove(idx - round);
             round += 1;
         }
+        indices.len()
     }
 
     pub fn len(&self) -> usize {

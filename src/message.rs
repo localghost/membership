@@ -2,8 +2,6 @@ use bytes::{BufMut, Buf, BytesMut};
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::io::Cursor;
 use std::fmt;
-use log::{debug, info, error};
-
 
 #[derive(Debug, PartialEq)]
 pub(super) enum MessageType {
@@ -26,9 +24,9 @@ impl Message {
     }
 
     pub(super) fn with_members(&mut self, alive: &[SocketAddr], dead: &[SocketAddr]) -> (usize, usize) {
-        let countAlive = self.add_members(alive);
-        let countDead = self.add_members(dead);
-        (countAlive, countDead)
+        let count_alive = self.add_members(alive);
+        let count_dead = self.add_members(dead);
+        (count_alive, count_dead)
     }
 
     fn add_members(&mut self, members: &[SocketAddr]) -> usize {
@@ -45,7 +43,7 @@ impl Message {
                 }
                 SocketAddr::V6(_sa) => {
                     panic!("IPv6 is not implemented yet.");
-                    header |= 1 << idx;
+//                    header |= 1 << idx;
                 }
             }
         }
@@ -97,14 +95,14 @@ impl Message {
         let header = cursor.get_u8();
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result = Vec::with_capacity(count as usize);
-        for idx in 0..count {
+        for _ in 0..count {
             if (header & 1) == 0 {
                 result.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())), cursor.get_u16_be()));
             }
             else {
                 panic!("IPv6 is not implemented yet.");
             }
-            header >> 1;
+            let _ = header >> 1;
         }
         result
     }

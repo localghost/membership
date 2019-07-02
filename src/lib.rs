@@ -4,19 +4,14 @@ use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 use std::time::Duration;
-use bytes::{BufMut, Buf, BytesMut};
-use std::io::Cursor;
 use std::collections::vec_deque::VecDeque;
-use std::collections::{HashMap, HashSet, BTreeMap, BinaryHeap};
+use std::collections::{HashSet};
 use std::fmt;
-use log::{debug, info, error};
-use std::default::Default;
+use log::{debug, info};
 
 mod message;
 mod circular_buffer;
 use crate::message::{MessageType, Message};
-use std::cmp::Reverse;
-use std::convert::TryInto;
 use crate::circular_buffer::CircularBuffer;
 
 #[derive(StructOpt, Default)]
@@ -156,7 +151,6 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut last_epoch_time = std::time::Instant::now();
-        let mut new_epoch = false;
         let mut requests = VecDeque::<Request>::new();
         let mut acks = Vec::<Ack>::new();
 
@@ -331,7 +325,9 @@ impl Gossip {
                 info!("Member joined: {:?}", member);
                 self.members.push(member);
             }
-            self.dead_members.remove(member);
+            if self.dead_members.remove(&member) > 0 {
+                info!("Member {} found on the dead list", member);
+            }
         }
     }
 
