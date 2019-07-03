@@ -1,12 +1,12 @@
-pub struct CircularBuffer<T> {
+pub struct UniqueCircularBuffer<T> {
     buffer: Vec<T>,
     size: usize,
 }
 
 // FIXME not the most effective implementation, consider using a list or research for a better data structure
-impl<T> CircularBuffer<T> {
+impl<T> UniqueCircularBuffer<T> {
     pub fn new(size: usize) -> Self {
-        CircularBuffer{
+        UniqueCircularBuffer {
             buffer: Vec::<T>::with_capacity(size+1),
             size,
         }
@@ -28,6 +28,7 @@ impl<T> CircularBuffer<T> {
         indices.len()
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
@@ -43,12 +44,12 @@ mod test {
 
     #[test]
     fn new() {
-        assert_eq!(CircularBuffer::<i32>::new(4).len(), 0);
+        assert_eq!(UniqueCircularBuffer::<i32>::new(4).len(), 0);
     }
 
     #[test]
     fn push() {
-        let mut buffer = CircularBuffer::new(3);
+        let mut buffer = UniqueCircularBuffer::new(3);
         assert_eq!(as_vec(&buffer), []);
 
         buffer.push(42);
@@ -70,7 +71,7 @@ mod test {
 
     #[test]
     fn remove() {
-        let mut buffer = CircularBuffer::new(3);
+        let mut buffer = UniqueCircularBuffer::new(3);
 
         buffer.remove(&5);
 
@@ -82,7 +83,7 @@ mod test {
 
         buffer.push(1);
         buffer.push(1);
-        assert_eq!(as_vec(&buffer), [1,1]);
+        assert_eq!(as_vec(&buffer), [1]);
 
         buffer.remove(&1);
         assert_eq!(as_vec(&buffer), []);
@@ -100,7 +101,7 @@ mod test {
         assert_eq!(as_vec(&buffer), [5,4,2]);
     }
 
-    fn as_vec<T>(buffer: &CircularBuffer<T>) -> Vec<T> where T: Clone {
+    fn as_vec<T>(buffer: &UniqueCircularBuffer<T>) -> Vec<T> where T: Clone {
         buffer.iter().cloned().collect()
     }
 }

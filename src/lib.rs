@@ -10,9 +10,9 @@ use std::fmt;
 use log::{debug, info};
 
 mod message;
-mod circular_buffer;
+mod unique_circular_buffer;
 use crate::message::{MessageType, Message};
-use crate::circular_buffer::CircularBuffer;
+use crate::unique_circular_buffer::UniqueCircularBuffer;
 
 #[derive(StructOpt, Default)]
 pub struct ProtocolConfig {
@@ -81,10 +81,10 @@ struct Ack {
     originator: Option<SocketAddr>,
 }
 
-struct Ack2 {
-    request: Request,
-    request_time: std::time::Instant
-}
+//struct Ack2 {
+//    request: Request,
+//    request_time: std::time::Instant
+//}
 
 impl Ord for Ack {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -119,7 +119,7 @@ pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
-    dead_members: CircularBuffer<SocketAddr>,
+    dead_members: UniqueCircularBuffer<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
@@ -134,7 +134,7 @@ impl Gossip {
             config,
             server: None,
             members: vec!(),
-            dead_members: CircularBuffer::new(5),
+            dead_members: UniqueCircularBuffer::new(5),
             members_presence: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
@@ -144,7 +144,7 @@ impl Gossip {
     }
 
     pub fn join(&mut self, _member: IpAddr) {
-        self.join_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
+        self.update_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
         let poll = Poll::new().unwrap();
         self.bind(&poll);
 
@@ -165,7 +165,7 @@ impl Gossip {
 //                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
 //                                continue;
 //                            }
-                    self.join_members(
+                    self.update_members(
                         letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
                         letter.message.get_dead_members().into_iter()
                     );
@@ -317,10 +317,11 @@ impl Gossip {
         letter
     }
 
-    fn join_members<T1, T2>(&mut self, alive: T1, dead: T2)
+    fn update_members<T1, T2>(&mut self, alive: T1, dead: T2)
         where T1: Iterator<Item=SocketAddr>, T2: Iterator<Item=SocketAddr>
     {
-        self.remove_members2(dead);
+        // 'alive' notification beats 'dead' notification
+        self.remove_members(dead);
         for member in alive {
             if member == self.myself {
                 continue;
@@ -337,32 +338,25 @@ impl Gossip {
 
     fn kill_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
         for member in members {
+            self.remove_member(&member);
             self.dead_members.push(member);
         }
-//        members.cloned().map(|member|{ self.dead_members.push(member)});
-        self.remove_members2(members);
-//        self.dead_members.append(members);
-//        for member in members {
-//            if self.members_presence.remove(&member) {
-//                let idx = self.members.iter().position(|e| { *e == member }).unwrap();
-//                self.dead_members.push(self.members.remove(idx));
-//                if idx <= self.next_member_index && self.next_member_index > 0 {
-//                    self.next_member_index -= 1;
-//                }
-//                info!("Member removed: {:?}", member);
-//            }
-//        }
     }
 
-    fn remove_members2<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
+    fn remove_members<T>(&mut self, members: T) where T: Iterator<Item = SocketAddr> {
         for member in members {
-            if self.members_presence.remove(&member) {
-                let idx = self.members.iter().position(|e| { *e == member }).unwrap();
-                if idx <= self.next_member_index && self.next_member_index > 0 {
-                    self.next_member_index -= 1;
-                }
-                info!("Member removed: {:?}", member);
+            self.remove_member(&member);
+        }
+    }
+
+    fn remove_member(&mut self, member: &SocketAddr) {
+        if self.members_presence.remove(&member) {
+            let idx = self.members.iter().position(|e| { e == member }).unwrap();
+            self.members.remove(idx);
+            if idx <= self.next_member_index && self.next_member_index > 0 {
+                self.next_member_index -= 1;
             }
+            info!("Member removed: {:?}", member);
         }
     }
 }

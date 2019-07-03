@@ -1,5 +1,5 @@
 use bytes::{BufMut, Buf, BytesMut};
-use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr, Ipv4Addr};
 use std::io::Cursor;
 use std::fmt;
 
@@ -47,7 +47,7 @@ impl Message {
                 }
             }
         }
-        header |= 1 << count;
+        header |= 1 << count as u8;
         *self.buffer.iter_mut().skip(header_position).next().unwrap() = header;
         count
     }
@@ -152,6 +152,7 @@ impl fmt::Debug for Message {
 mod test {
     use super::*;
     use std::str::FromStr;
+    use std::net::SocketAddrV4;
 
     #[test]
     fn create_message() {
