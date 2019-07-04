@@ -25,7 +25,7 @@ impl Message {
 
     pub(super) fn with_members(&mut self, alive: &[SocketAddr], dead: &[SocketAddr]) -> (usize, usize) {
         let count_alive = self.add_members(alive);
-        let count_dead = self.add_members(dead);
+        let count_dead = if !dead.is_empty() { self.add_members(dead) } else { 0 };
         (count_alive, count_dead)
     }
 
@@ -53,7 +53,7 @@ impl Message {
     }
 
     pub(super) fn get_type(&self) -> MessageType {
-        let encoded_type = self.get_cursor_into_buffer(0).get_i32_be();
+        let encoded_type = self.get_cursor_into_buffer(0).unwrap().get_i32_be();
         match encoded_type {
             x if x == MessageType::Ping as i32 => {
                 MessageType::Ping
@@ -71,13 +71,13 @@ impl Message {
     }
 
     pub(super) fn get_sequence_number(&self) -> u64 {
-        self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64).get_u64_be()
+        self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64).unwrap().get_u64_be()
     }
 
     pub(super) fn get_epoch(&self) -> u64 {
         self.get_cursor_into_buffer(
             (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64
-        ).get_u64_be()
+        ).unwrap().get_u64_be()
     }
 
     pub(super) fn get_alive_members(&self) -> Vec<SocketAddr> {
@@ -90,8 +90,12 @@ impl Message {
         self.get_members(position)
     }
 
-    pub(super) fn get_members(&self, position: u64) -> Vec<SocketAddr> {
-        let mut cursor = self.get_cursor_into_buffer(position);
+    fn get_members(&self, position: u64) -> Vec<SocketAddr> {
+        let cursor = self.get_cursor_into_buffer(position);
+        if cursor.is_none() {
+            return vec!()
+        }
+        let mut cursor = cursor.unwrap();
         let header = cursor.get_u8();
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result = Vec::with_capacity(count as usize);
@@ -108,7 +112,12 @@ impl Message {
     }
 
     fn count_members_bytes(&self, position: u64) -> u64 {
-        let mut cursor = self.get_cursor_into_buffer(position);
+        let cursor = self.get_cursor_into_buffer(position);
+        if cursor.is_none() {
+            return 0
+        }
+
+        let mut cursor = cursor.unwrap();
         let header = cursor.get_u8();
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result: usize = 0;
@@ -126,10 +135,13 @@ impl Message {
         self.buffer
     }
 
-    fn get_cursor_into_buffer(&self, position: u64) -> Cursor<&BytesMut> {
+    fn get_cursor_into_buffer(&self, position: u64) -> Option<Cursor<&BytesMut>> {
+        if position >= self.buffer.len() as u64 {
+            return None
+        }
         let mut cursor = Cursor::new(&self.buffer);
         cursor.set_position(position);
-        cursor
+        Some(cursor)
     }
 }
 
@@ -160,6 +172,8 @@ mod test {
         assert_eq!(message.get_type(), MessageType::Ping);
         assert_eq!(message.get_sequence_number(), 1);
         assert_eq!(message.get_epoch(), 2);
+        assert_eq!(message.get_alive_members(), []);
+        assert_eq!(message.get_dead_members(), []);
     }
 
     #[test]
