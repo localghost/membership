@@ -165,10 +165,20 @@ impl Gossip {
 //                                info!("Message not from this epoch: got={}, expected={}", letter.message.get_epoch(), self.epoch);
 //                                continue;
 //                            }
-                    self.update_members(
-                        letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
-                        letter.message.get_dead_members().into_iter()
-                    );
+                    match letter.message.get_type() {
+                        message::MessageType::PingIndirect => {
+                            self.update_members(
+                                letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
+                                letter.message.get_dead_members().into_iter()
+                            );
+                        }
+                        _ => {
+                            self.update_members(
+                                letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
+                                letter.message.get_dead_members().into_iter()
+                            );
+                        }
+                    }
                     match letter.message.get_type() {
                         message::MessageType::Ping => {
                             requests.push_back(Request::Ack(
