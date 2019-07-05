@@ -311,8 +311,8 @@ impl Gossip {
     }
 
     fn recv_letter(&mut self) -> IncomingLetter {
-        let (_, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
-        let letter = IncomingLetter{sender, message: message::Message::from(&self.recv_buffer)};
+        let (count, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
+        let letter = IncomingLetter{sender, message: message::Message::from_bytes(&self.recv_buffer, count)};
         debug!("{:?}", letter);
         letter
     }

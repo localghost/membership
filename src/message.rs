@@ -2,6 +2,7 @@ use bytes::{BufMut, Buf, BytesMut};
 use std::net::{IpAddr, SocketAddr, Ipv4Addr};
 use std::io::Cursor;
 use std::fmt;
+use log::{debug};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum MessageType {
@@ -21,6 +22,10 @@ impl Message {
         message.buffer.put_u64_be(sequence_number);
         message.buffer.put_u64_be(epoch);
         message
+    }
+
+    pub(super) fn from_bytes(bytes: &[u8], count: usize) -> Self {
+        Message{ buffer: BytesMut::from(bytes.iter().take(count).cloned().collect::<Vec<_>>().as_slice()) }
     }
 
     pub(super) fn with_members(&mut self, alive: &[SocketAddr], dead: &[SocketAddr]) -> (usize, usize) {
@@ -97,6 +102,7 @@ impl Message {
         }
         let mut cursor = cursor.unwrap();
         let header = cursor.get_u8();
+        debug!("HEADER {:?}", header);
         let count = std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1;
         let mut result = Vec::with_capacity(count as usize);
         for _ in 0..count {
@@ -142,12 +148,6 @@ impl Message {
         let mut cursor = Cursor::new(&self.buffer);
         cursor.set_position(position);
         Some(cursor)
-    }
-}
-
-impl From<&[u8; 64]> for  Message {
-    fn from(src: &[u8; 64]) -> Self {
-        Message{ buffer: bytes::BytesMut::from(&src[..]) }
     }
 }
 
@@ -212,6 +212,18 @@ mod test {
                 SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())
             ]
         );
+        assert_eq!(message.get_dead_members(), []);
+    }
+
+    #[test]
+    fn from_bytes() {
+        let message = Message::create(MessageType::PingAck, 1, 10);
+        let buffer = message.into_inner();
+        let message = Message::from_bytes(buffer.as_ref(), buffer.len());
+        assert_eq!(message.get_type(), MessageType::PingAck);
+        assert_eq!(message.get_sequence_number(), 1);
+        assert_eq!(message.get_epoch(), 10);
+        assert_eq!(message.get_alive_members(), []);
         assert_eq!(message.get_dead_members(), []);
     }
 }
