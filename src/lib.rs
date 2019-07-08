@@ -72,6 +72,7 @@ struct Header {
     sequence_number: u64,
 }
 
+#[derive(Debug)]
 struct Ack {
     target: SocketAddr,
     epoch: u64,
@@ -246,8 +247,9 @@ impl Gossip {
                             Request::PingIndirect(header) => {
                                 for member in self.members.iter().take(self.config.num_indirect as usize) {
                                     let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                                    // filter is needed to not include target node on the alive list as it is being suspected
                                     message.with_members(
-                                        &std::iter::once(&header.target).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
+                                        &std::iter::once(&header.target).chain(self.members.iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
                                         &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                     );
                                     self.send_letter(OutgoingLetter { message, target: *member });
