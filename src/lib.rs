@@ -205,6 +205,8 @@ impl Gossip {
                                             ));
                                         }
                                         continue;
+                                    } else {
+                                        debug!("Unexpected letter: {:?}", letter);
                                     }
                                 }
                                 acks.push(ack);
@@ -276,7 +278,10 @@ impl Gossip {
                             }
                             Request::AckIndirect(header, member) => {
                                 let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                message.with_members(&std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(), &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                                message.with_members(
+                                    &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
+                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                );
                                 self.send_letter(OutgoingLetter { message, target: header.target });
                             }
                         }
@@ -288,7 +293,8 @@ impl Gossip {
 
             for ack in acks.drain(..).collect::<Vec<Ack>>() {
                 if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
-                    if !ack.indirect {
+                    if !ack.indirect && ack.originator.is_none() {
+                        // only Ack of a basic Ping request should be confirmed with PingIndirect
                         requests.push_back(Request::PingIndirect(
                             Header { target: ack.target, epoch: ack.epoch, sequence_number: ack.sequence_number }
                         ));
