@@ -109,7 +109,7 @@ impl PartialEq for Ack {
 
 #[derive(Debug)]
 enum Request {
-    Ping,
+    Ping(Header),
     PingIndirect(Header),
     PingProxy(Header, SocketAddr),
     Ack(Header),
@@ -124,6 +124,7 @@ pub struct Gossip {
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
+    sequence_number: u64,
     recv_buffer: [u8; 64],
     myself: SocketAddr,
 }
@@ -139,6 +140,7 @@ impl Gossip {
             members_presence: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
+            sequence_number: 0,
             recv_buffer: [0; 64],
             myself
         }
@@ -155,7 +157,13 @@ impl Gossip {
         let mut requests = VecDeque::<Request>::new();
         let mut acks = Vec::<Ack>::new();
 
-        requests.push_back(Request::Ping);
+        requests.push_front(Request::Ping(Header{
+            // the member we were given to join should be on the alive members list
+            target: self.get_next_member().unwrap(),
+            epoch: self.epoch,
+            sequence_number: self.get_next_sequence_number()
+        }));
+
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
@@ -227,26 +235,28 @@ impl Gossip {
                     if let Some(request) = requests.pop_front() {
                         debug!("{:?}", request);
                         match request {
-                            Request::Ping => {
-                                if self.members.len() > 0 {
-                                    let target = self.members[self.next_member_index];
-//                                self.send_ping(target, sequence_number);
-                                    let mut message = Message::create(MessageType::Ping, sequence_number, self.epoch);
-                                    // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                                    // as that may lead to late failure discovery
-                                    message.with_members(
-                                        &self.members.iter().skip(self.next_member_index).chain(self.members.iter().take(self.next_member_index)).cloned().collect::<Vec<_>>(),
-                                        &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                    );
-                                    self.send_letter(OutgoingLetter { message, target });
+                            Request::Ping(header) => {
+                                let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                                // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                                // as that may lead to late failure discovery
+                                message.with_members(
+                                    &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                );
+                                self.send_letter(OutgoingLetter { message, target: header.target });
 //                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
 //                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
-                                    acks.push(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), indirect: false, originator: None });
-                                    sequence_number += 1;
-                                    self.next_member_index = (self.next_member_index + 1) % self.members.len();
-                                }
+                                acks.push(Ack {
+                                    sequence_number: header.sequence_number,
+                                    epoch: header.epoch,
+                                    target: header.target,
+                                    request_time: std::time::Instant::now(),
+                                    indirect: false,
+                                    originator: None
+                                });
                             }
                             Request::PingIndirect(header) => {
+                                // FIXME do not send the message to the member that is being suspected
                                 for member in self.members.iter().take(self.config.num_indirect as usize) {
                                     let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                                     // filter is needed to not include target node on the alive list as it is being suspected
@@ -312,7 +322,13 @@ impl Gossip {
                 self.epoch += 1;
                 info!("New epoch: {}", self.epoch);
                 last_epoch_time = now;
-                requests.push_front(Request::Ping);
+                if let Some(member) = self.get_next_member() {
+                    requests.push_front(Request::Ping(Header {
+                        target: member,
+                        epoch: self.epoch,
+                        sequence_number: self.get_next_sequence_number()
+                    }));
+                }
             }
         }
     }
@@ -376,6 +392,22 @@ impl Gossip {
             }
             info!("Member removed: {:?}", member);
         }
+    }
+
+    fn get_next_member(&mut self) -> Option<SocketAddr> {
+        if self.members.is_empty() {
+            return None
+        }
+
+        let target = self.members[self.next_member_index];
+        self.next_member_index = (self.next_member_index + 1) % self.members.len();
+        Some(target)
+    }
+
+    fn get_next_sequence_number(&mut self) -> u64 {
+        let sequence_number = self.sequence_number;
+        self.sequence_number += 1;
+        sequence_number
     }
 }
 
