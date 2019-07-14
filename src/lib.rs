@@ -218,47 +218,47 @@ impl Gossip {
 //                            }
                             for ack in acks2.drain(..).collect::<Vec<_>>() {
                                 match ack.request {
-                                    Request::PingIndirect(header) => {
+                                    Request::PingIndirect(ref header) => {
                                         if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
                                             continue;
                                         }
                                     }
-                                    Request::PingProxy(header, reply_to) => {
+                                    Request::PingProxy(ref header, ref reply_to) => {
                                         if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
                                             requests.push_back(Request::AckIndirect(
                                                 Header {
-                                                    target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                                    target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
                                                 },
                                                 letter.sender
                                             ));
                                             continue;
                                         }
                                     }
-                                    Request::Ping(header) => {
-                                        if letter.sender == ack.header.target && letter.message.get_sequence_number() == ack.header.sequence_number {
+                                    Request::Ping(ref header) => {
+                                        if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
                                             continue;
                                         }
                                     }
                                     _ => unreachable!()
                                 }
                                 acks2.push(ack);
-                                if let Request::PingIndirect(header) = ack.request {
-                                } else {
-                                    if letter.sender == ack.header.target && letter.message.get_sequence_number() == ack.header.sequence_number {
-                                        if let Some(reply_to) = ack.originator {
-                                            requests.push_back(Request::AckIndirect(
-                                                Header {
-                                                    target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                                },
-                                                letter.sender
-                                            ));
-                                        }
-                                        continue;
-                                    } else {
-                                        debug!("Unexpected letter: {:?}", letter);
-                                    }
-                                }
-                                acks.push(ack);
+//                                if let Request::PingIndirect(header) = ack.request {
+//                                } else {
+//                                    if letter.sender == ack.header.target && letter.message.get_sequence_number() == ack.header.sequence_number {
+//                                        if let Some(reply_to) = ack.originator {
+//                                            requests.push_back(Request::AckIndirect(
+//                                                Header {
+//                                                    target: reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+//                                                },
+//                                                letter.sender
+//                                            ));
+//                                        }
+//                                        continue;
+//                                    } else {
+//                                        debug!("Unexpected letter: {:?}", letter);
+//                                    }
+//                                }
+//                                acks.push(ack);
                             }
                         }
                         message::MessageType::PingIndirect => {
@@ -287,12 +287,12 @@ impl Gossip {
                                 self.send_letter(OutgoingLetter { message, target: header.target });
 //                                            ack = Some(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None });
 //                                            new_acks.push(Reverse(Ack { sequence_number, epoch: self.epoch, target, request_time: std::time::Instant::now(), originator: None }));
-                                acks.push(Ack {
-                                    header,
-                                    request_time: std::time::Instant::now(),
-                                    indirect: false,
-                                    originator: None
-                                });
+//                                acks.push(Ack {
+//                                    header,
+//                                    request_time: std::time::Instant::now(),
+//                                    indirect: false,
+//                                    originator: None
+//                                });
                                 acks2.push(Ack2{request, request_time: std::time::Instant::now()});
                             }
                             Request::PingIndirect(header) => {
