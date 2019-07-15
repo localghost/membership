@@ -78,6 +78,12 @@ struct Ack {
     request_time: std::time::Instant
 }
 
+impl Ack {
+    fn new(request: Request) -> Self {
+        Ack { request, request_time: std::time::Instant::now() }
+    }
+}
+
 #[derive(Debug)]
 enum Request {
     Ping(Header),
@@ -98,6 +104,7 @@ pub struct Gossip {
     sequence_number: u64,
     recv_buffer: [u8; 64],
     myself: SocketAddr,
+    requests: VecDeque<Request>
 }
 
 impl Gossip {
@@ -113,7 +120,8 @@ impl Gossip {
             epoch: 0,
             sequence_number: 0,
             recv_buffer: [0; 64],
-            myself
+            myself,
+            requests: VecDeque::<Request>::with_capacity(32)
         }
     }
 
@@ -125,15 +133,15 @@ impl Gossip {
         let mut events = Events::with_capacity(1024);
         let mut sequence_number: u64 = 0;
         let mut last_epoch_time = std::time::Instant::now();
-        let mut requests = VecDeque::<Request>::new();
-        let mut acks = Vec::<Ack>::new();
+        let mut acks = Vec::<Ack>::with_capacity(32);
 
-        requests.push_front(Request::Ping(Header{
+        let initial_ping = Request::Ping(Header{
             // the member we were given to join should be on the alive members list
             target: self.get_next_member().unwrap(),
             epoch: self.epoch,
             sequence_number: self.get_next_sequence_number()
-        }));
+        });
+        self.requests.push_front(initial_ping);
 
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
@@ -156,7 +164,7 @@ impl Gossip {
                     }
                     match letter.message.get_type() {
                         message::MessageType::Ping => {
-                            requests.push_back(Request::Ack(
+                            self.requests.push_back(Request::Ack(
                                 Header {
                                     target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
                                 },
@@ -172,7 +180,7 @@ impl Gossip {
                                     }
                                     Request::PingProxy(ref header, ref reply_to) => {
                                         if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                            requests.push_back(Request::AckIndirect(
+                                            self.requests.push_back(Request::AckIndirect(
                                                 Header {
                                                     target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
                                                 },
@@ -192,7 +200,7 @@ impl Gossip {
                             }
                         }
                         message::MessageType::PingIndirect => {
-                            requests.push_back(Request::PingProxy(
+                            self.requests.push_back(Request::PingProxy(
                                 Header {
                                     target: letter.message.get_alive_members()[0],
                                     sequence_number: letter.message.get_sequence_number(),
@@ -203,7 +211,7 @@ impl Gossip {
                         }
                     }
                 } else if event.readiness().is_writable() {
-                    if let Some(request) = requests.pop_front() {
+                    if let Some(request) = self.requests.pop_front() {
                         debug!("{:?}", request);
                         match request {
                             Request::Ping(ref header) => {
@@ -215,7 +223,7 @@ impl Gossip {
                                     &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                 );
                                 self.send_letter(OutgoingLetter { message, target: header.target });
-                                acks.push(Ack {request, request_time: std::time::Instant::now()});
+                                acks.push(Ack::new(request));
                             }
                             Request::PingIndirect(ref header) => {
                                 // FIXME do not send the message to the member that is being suspected
@@ -228,13 +236,13 @@ impl Gossip {
                                     );
                                     self.send_letter(OutgoingLetter { message, target: *member });
                                 }
-                                acks.push(Ack {request, request_time: std::time::Instant::now()});
+                                acks.push(Ack::new(request));
                             },
                             Request::PingProxy(ref header, reply_to) => {
                                 let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
 //                                        message.with_members()
                                 self.send_letter(OutgoingLetter{ message, target: header.target });
-                                acks.push(Ack {request, request_time: std::time::Instant::now()});
+                                acks.push(Ack::new(request));
                             }
                             Request::Ack(header) => {
                                 let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
@@ -260,7 +268,7 @@ impl Gossip {
                 if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
                     match ack.request {
                         Request::Ping(header) => {
-                            requests.push_back(Request::PingIndirect(header));
+                            self.requests.push_back(Request::PingIndirect(header));
                         }
                         Request::PingIndirect(header)|Request::PingProxy(header, ..) => {
                             // TODO: mark the member as suspected
@@ -275,18 +283,23 @@ impl Gossip {
             }
 
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
-                self.epoch += 1;
-                info!("New epoch: {}", self.epoch);
+                self.advance_epoch();
                 last_epoch_time = now;
-                if let Some(member) = self.get_next_member() {
-                    requests.push_front(Request::Ping(Header {
-                        target: member,
-                        epoch: self.epoch,
-                        sequence_number: self.get_next_sequence_number()
-                    }));
-                }
             }
         }
+    }
+
+    fn advance_epoch(&mut self) {
+        if let Some(member) = self.get_next_member() {
+            let ping = Request::Ping(Header {
+                target: member,
+                epoch: self.epoch,
+                sequence_number: self.get_next_sequence_number()
+            });
+            self.requests.push_front(ping);
+        }
+        self.epoch += 1;
+        info!("New epoch: {}", self.epoch);
     }
 
     fn bind(&mut self, poll: &Poll) {
