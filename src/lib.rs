@@ -131,7 +131,6 @@ impl Gossip {
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
-        let mut sequence_number: u64 = 0;
         let mut last_epoch_time = std::time::Instant::now();
         let mut acks = Vec::<Ack>::with_capacity(32);
 
@@ -238,9 +237,12 @@ impl Gossip {
                                 }
                                 acks.push(Ack::new(request));
                             },
-                            Request::PingProxy(ref header, reply_to) => {
+                            Request::PingProxy(ref header, ..) => {
                                 let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
-//                                        message.with_members()
+                                message.with_members(
+                                    &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                );
                                 self.send_letter(OutgoingLetter{ message, target: header.target });
                                 acks.push(Ack::new(request));
                             }
@@ -265,19 +267,9 @@ impl Gossip {
             let now = std::time::Instant::now();
 
             for ack in acks.drain(..).collect::<Vec<_>>() {
-                if std::time::Instant::now() > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
-                    match ack.request {
-                        Request::Ping(header) => {
-                            self.requests.push_back(Request::PingIndirect(header));
-                        }
-                        Request::PingIndirect(header)|Request::PingProxy(header, ..) => {
-                            // TODO: mark the member as suspected
-                            self.kill_members(std::iter::once(header.target));
-                        }
-                        _ => unreachable!()
-                    }
-                }
-                else {
+                if now > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
+                    self.handle_timeout_ack(ack);
+                } else {
                     acks.push(ack);
                 }
             }
@@ -302,9 +294,23 @@ impl Gossip {
         info!("New epoch: {}", self.epoch);
     }
 
+    fn handle_timeout_ack(&mut self, ack: Ack) {
+        match ack.request {
+            Request::Ping(header) => {
+                self.requests.push_back(Request::PingIndirect(header));
+            }
+            Request::PingIndirect(header)|Request::PingProxy(header, ..) => {
+                // TODO: mark the member as suspected
+                self.kill_members(std::iter::once(header.target));
+            }
+            _ => unreachable!()
+        }
+    }
+
     fn bind(&mut self, poll: &Poll) {
         let address = format!("{}:{}", self.config.bind_address, self.config.port).parse().unwrap();
         self.server = Some(UdpSocket::bind(&address).unwrap());
+        // FIXME: change to `PollOpt::edge()`
         poll.register(self.server.as_ref().unwrap(), Token(0), Ready::readable() | Ready::writable(), PollOpt::level()).unwrap();
     }
 
