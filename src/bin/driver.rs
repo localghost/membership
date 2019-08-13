@@ -8,10 +8,8 @@ fn main() {
     let config = Config::from_args();
 //    let proto_config = ProtocolConfig::from_args();
 //    Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
-    println!("BEFORE");
     let mut gossip2 = Gossip2::new(config.proto_config);
     gossip2.join(IpAddr::from_str(&config.join_address).unwrap());
     std::thread::sleep(std::time::Duration::from_secs(5));
     println!("{:?}", gossip2.get_members());
-    println!("AFTER");
 }
