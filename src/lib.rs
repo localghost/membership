@@ -1,5 +1,6 @@
 use mio::*;
 use mio::net::*;
+use mio_extras::channel::{Sender, Receiver};
 use structopt::StructOpt;
 use std::net::{IpAddr, SocketAddr, Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
@@ -94,6 +95,10 @@ enum Request {
     AckIndirect(Header, SocketAddr)
 }
 
+enum ChannelMessage {
+    Stop,
+}
+
 pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
@@ -105,12 +110,15 @@ pub struct Gossip {
     sequence_number: u64,
     recv_buffer: [u8; 64],
     myself: SocketAddr,
-    requests: VecDeque<Request>
+    requests: VecDeque<Request>,
+    sender: Sender<ChannelMessage>,
+    receiver: Receiver<ChannelMessage>,
 }
 
 impl Gossip {
     pub fn new(config: ProtocolConfig) -> Gossip {
         let myself = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config.bind_address).unwrap(), config.port));
+        let (sender, receiver) = mio_extras::channel::channel();
         Gossip{
             config,
             server: None,
@@ -122,14 +130,17 @@ impl Gossip {
             sequence_number: 0,
             recv_buffer: [0; 64],
             myself,
-            requests: VecDeque::<Request>::with_capacity(32)
+            requests: VecDeque::<Request>::with_capacity(32),
+            sender,
+            receiver
         }
     }
 
-    pub fn join(&mut self, _member: IpAddr) -> Arc<Mutex<Vec<SocketAddr>>> {
+    pub fn join(&mut self, _member: IpAddr) {
         self.update_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
         let poll = Poll::new().unwrap();
         self.bind(&poll);
+        poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty());
 
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
@@ -143,125 +154,145 @@ impl Gossip {
         });
         self.requests.push_front(initial_ping);
 
-        loop {
+        'mainloop: loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
-                if event.readiness().is_readable() {
-                    let letter = self.recv_letter();
-                    match letter.message.get_type() {
-                        message::MessageType::PingIndirect => {
-                            self.update_members(
-                                letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
-                                letter.message.get_dead_members().into_iter()
-                            );
-                        }
-                        _ => {
-                            self.update_members(
-                                letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
-                                letter.message.get_dead_members().into_iter()
-                            );
-                        }
-                    }
-                    match letter.message.get_type() {
-                        message::MessageType::Ping => {
-                            self.requests.push_back(Request::Ack(
-                                Header {
-                                    target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                },
-                            ));
-                        }
-                        message::MessageType::PingAck => {
-                            for ack in acks.drain(..).collect::<Vec<_>>() {
-                                match ack.request {
-                                    Request::PingIndirect(ref header) => {
-                                        if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                            continue;
-                                        }
-                                    }
-                                    Request::PingProxy(ref header, ref reply_to) => {
-                                        if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                            self.requests.push_back(Request::AckIndirect(
-                                                Header {
-                                                    target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                                },
-                                                letter.sender
-                                            ));
-                                            continue;
-                                        }
-                                    }
-                                    Request::Ping(ref header) => {
-                                        if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                            continue;
-                                        }
-                                    }
-                                    _ => unreachable!()
-                                }
-                                acks.push(ack);
-                            }
-                        }
-                        message::MessageType::PingIndirect => {
-                            self.requests.push_back(Request::PingProxy(
-                                Header {
-                                    target: letter.message.get_alive_members()[0],
-                                    sequence_number: letter.message.get_sequence_number(),
-                                    epoch: letter.message.get_epoch()
-                                },
-                                letter.sender
-                            ))
-                        }
-                    }
-                } else if event.readiness().is_writable() {
-                    if let Some(request) = self.requests.pop_front() {
-                        debug!("{:?}", request);
-                        match request {
-                            Request::Ping(ref header) => {
-                                let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
-                                // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                                // as that may lead to late failure discovery
-                                message.with_members(
-                                    &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
-                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                );
-                                self.send_letter(OutgoingLetter { message, target: header.target });
-                                acks.push(Ack::new(request));
-                            }
-                            Request::PingIndirect(ref header) => {
-                                // FIXME do not send the message to the member that is being suspected
-                                for member in self.members.read().unwrap().iter().take(self.config.num_indirect as usize) {
-                                    let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
-                                    // filter is needed to not include target node on the alive list as it is being suspected
-                                    message.with_members(
-                                        &std::iter::once(&header.target).chain(self.members.read().unwrap().iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
-                                        &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                match event.token() {
+                    Token(0) => {
+                        if event.readiness().is_readable() {
+                            let letter = self.recv_letter();
+                            match letter.message.get_type() {
+                                message::MessageType::PingIndirect => {
+                                    self.update_members(
+                                        letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
+                                        letter.message.get_dead_members().into_iter()
                                     );
-                                    self.send_letter(OutgoingLetter { message, target: *member });
                                 }
-                                acks.push(Ack::new(request));
-                            },
-                            Request::PingProxy(ref header, ..) => {
-                                let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
-                                message.with_members(
-                                    &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
-                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                );
-                                self.send_letter(OutgoingLetter{ message, target: header.target });
-                                acks.push(Ack::new(request));
+                                _ => {
+                                    self.update_members(
+                                        letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
+                                        letter.message.get_dead_members().into_iter()
+                                    );
+                                }
                             }
-                            Request::Ack(header) => {
-                                let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                message.with_members(&self.members.read().unwrap(), &self.dead_members.iter().cloned().collect::<Vec<_>>());
-                                self.send_letter(OutgoingLetter { message, target: header.target });
+                            match letter.message.get_type() {
+                                message::MessageType::Ping => {
+                                    self.requests.push_back(Request::Ack(
+                                        Header {
+                                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                        },
+                                    ));
+                                }
+                                message::MessageType::PingAck => {
+                                    for ack in acks.drain(..).collect::<Vec<_>>() {
+                                        match ack.request {
+                                            Request::PingIndirect(ref header) => {
+                                                if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                                    continue;
+                                                }
+                                            }
+                                            Request::PingProxy(ref header, ref reply_to) => {
+                                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                                    self.requests.push_back(Request::AckIndirect(
+                                                        Header {
+                                                            target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                                        },
+                                                        letter.sender
+                                                    ));
+                                                    continue;
+                                                }
+                                            }
+                                            Request::Ping(ref header) => {
+                                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                                    continue;
+                                                }
+                                            }
+                                            _ => unreachable!()
+                                        }
+                                        acks.push(ack);
+                                    }
+                                }
+                                message::MessageType::PingIndirect => {
+                                    self.requests.push_back(Request::PingProxy(
+                                        Header {
+                                            target: letter.message.get_alive_members()[0],
+                                            sequence_number: letter.message.get_sequence_number(),
+                                            epoch: letter.message.get_epoch()
+                                        },
+                                        letter.sender
+                                    ))
+                                }
                             }
-                            Request::AckIndirect(header, member) => {
-                                let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                message.with_members(
-                                    &std::iter::once(&member).chain(self.members.read().unwrap().iter()).cloned().collect::<Vec<_>>(),
-                                    &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                );
-                                self.send_letter(OutgoingLetter { message, target: header.target });
+                        } else if event.readiness().is_writable() {
+                            if let Some(request) = self.requests.pop_front() {
+                                debug!("{:?}", request);
+                                match request {
+                                    Request::Ping(ref header) => {
+                                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                                        // as that may lead to late failure discovery
+                                        message.with_members(
+                                            &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                        );
+                                        self.send_letter(OutgoingLetter { message, target: header.target });
+                                        acks.push(Ack::new(request));
+                                    }
+                                    Request::PingIndirect(ref header) => {
+                                        // FIXME do not send the message to the member that is being suspected
+                                        for member in self.members.read().unwrap().iter().take(self.config.num_indirect as usize) {
+                                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                                            // filter is needed to not include target node on the alive list as it is being suspected
+                                            message.with_members(
+                                                &std::iter::once(&header.target).chain(self.members.read().unwrap().iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
+                                                &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                            );
+                                            self.send_letter(OutgoingLetter { message, target: *member });
+                                        }
+                                        acks.push(Ack::new(request));
+                                    },
+                                    Request::PingProxy(ref header, ..) => {
+                                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                                        message.with_members(
+                                            &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                        );
+                                        self.send_letter(OutgoingLetter{ message, target: header.target });
+                                        acks.push(Ack::new(request));
+                                    }
+                                    Request::Ack(header) => {
+                                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                                        message.with_members(&self.members.read().unwrap(), &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                                        self.send_letter(OutgoingLetter { message, target: header.target });
+                                    }
+                                    Request::AckIndirect(header, member) => {
+                                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                                        message.with_members(
+                                            &std::iter::once(&member).chain(self.members.read().unwrap().iter()).cloned().collect::<Vec<_>>(),
+                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                                        );
+                                        self.send_letter(OutgoingLetter { message, target: header.target });
+                                    }
+                                }
                             }
                         }
                     }
+                    Token(1) => {
+                        match self.receiver.try_recv() {
+                            Ok(message) => {
+                                match message {
+                                    ChannelMessage::Stop => {
+                                        println!("STOP received");
+                                        break 'mainloop;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("Not ready yet");
+                            }
+                        }
+                    }
+                    _ => unreachable!()
                 }
             }
 
@@ -387,30 +418,46 @@ impl Gossip {
     }
 }
 
+//pub struct Memberlist {
+//    members: Arc<RwLock<Vec<SocketAddr>>>
+//}
+//
+//impl Memberlist {
+//    fn new(members: Arc<RwLock<Vec<SocketAddr>>>) -> Self {
+//        Memberlist{members}
+//    }
+//
+//    fn get_members(&self) -> Vec<SocketAddr> {
+//        self.members.as_ref().unwrap().clone().read().unwrap().clone()
+//    }
+//}
+//
+//
 pub struct Gossip2 {
     config: ProtocolConfig,
-    members: Option<Arc<RwLock<Vec<SocketAddr>>>>,
+    sender: Option<Sender<ChannelMessage>>,
+    handle: Option<std::thread::JoinHandle<()>>
 }
 
 impl Gossip2 {
     pub fn new(config: ProtocolConfig) -> Self {
-        Gossip2 {
-            config,
-            members: None,
-        }
+        Gossip2 {config, sender: None, handle: None}
     }
 
     pub fn join(&mut self, member: IpAddr) {
         let mut gossip = Gossip::new(self.config.clone());
-        self.members = Some(gossip.members.clone());
+        self.sender = Some(gossip.sender.clone());
 //        gossip.join(member);
-        std::thread::spawn(move || {
+        self.handle = Some(std::thread::spawn(move || {
            gossip.join(member);
-        });
+        }));
     }
 
-    pub fn get_members(&self) -> Vec<SocketAddr> {
-        println!("Trying to get members");
-        self.members.as_ref().unwrap().clone().read().unwrap().clone()
+    pub fn stop(&self) {
+        self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
+    }
+
+    pub fn wait(&mut self) {
+        self.handle.take().unwrap().join();
     }
 }
