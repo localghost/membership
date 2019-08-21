@@ -95,14 +95,16 @@ enum Request {
     AckIndirect(Header, SocketAddr)
 }
 
+#[derive(Debug)]
 enum ChannelMessage {
     Stop,
+    GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
 pub struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    members: Arc<RwLock<Vec<SocketAddr>>>,
+    members: Vec<SocketAddr>,
     dead_members: UniqueCircularBuffer<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
@@ -122,7 +124,7 @@ impl Gossip {
         Gossip{
             config,
             server: None,
-            members: Arc::new(RwLock::new(vec!())),
+            members: vec!(),
             dead_members: UniqueCircularBuffer::new(5),
             members_presence: HashSet::new(),
             next_member_index: 0,
@@ -232,7 +234,7 @@ impl Gossip {
                                         // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                                         // as that may lead to late failure discovery
                                         message.with_members(
-                                            &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
                                             &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                         );
                                         self.send_letter(OutgoingLetter { message, target: header.target });
@@ -240,11 +242,11 @@ impl Gossip {
                                     }
                                     Request::PingIndirect(ref header) => {
                                         // FIXME do not send the message to the member that is being suspected
-                                        for member in self.members.read().unwrap().iter().take(self.config.num_indirect as usize) {
+                                        for member in self.members.iter().take(self.config.num_indirect as usize) {
                                             let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                                             // filter is needed to not include target node on the alive list as it is being suspected
                                             message.with_members(
-                                                &std::iter::once(&header.target).chain(self.members.read().unwrap().iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
+                                                &std::iter::once(&header.target).chain(self.members.iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
                                                 &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                             );
                                             self.send_letter(OutgoingLetter { message, target: *member });
@@ -254,7 +256,7 @@ impl Gossip {
                                     Request::PingProxy(ref header, ..) => {
                                         let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
                                         message.with_members(
-                                            &self.members.read().unwrap().iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
                                             &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                         );
                                         self.send_letter(OutgoingLetter{ message, target: header.target });
@@ -262,13 +264,13 @@ impl Gossip {
                                     }
                                     Request::Ack(header) => {
                                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                        message.with_members(&self.members.read().unwrap(), &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
                                         self.send_letter(OutgoingLetter { message, target: header.target });
                                     }
                                     Request::AckIndirect(header, member) => {
                                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                                         message.with_members(
-                                            &std::iter::once(&member).chain(self.members.read().unwrap().iter()).cloned().collect::<Vec<_>>(),
+                                            &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
                                             &self.dead_members.iter().cloned().collect::<Vec<_>>()
                                         );
                                         self.send_letter(OutgoingLetter { message, target: header.target });
@@ -280,10 +282,15 @@ impl Gossip {
                     Token(1) => {
                         match self.receiver.try_recv() {
                             Ok(message) => {
+                                debug!("ChannelMessage::{:?}", message);
                                 match message {
                                     ChannelMessage::Stop => {
-                                        println!("STOP received");
                                         break 'mainloop;
+                                    }
+                                    ChannelMessage::GetMembers(sender) => {
+                                        sender.send(
+                                            std::iter::once(&self.myself).chain(self.members.iter()).cloned().collect::<Vec<_>>()
+                                        );
                                     }
                                 }
                             }
@@ -369,7 +376,7 @@ impl Gossip {
             }
             if self.members_presence.insert(member) {
                 info!("Member joined: {:?}", member);
-                self.members.write().unwrap().push(member);
+                self.members.push(member);
             }
             if self.dead_members.remove(&member) > 0 {
                 info!("Member {} found on the dead list", member);
@@ -392,8 +399,8 @@ impl Gossip {
 
     fn remove_member(&mut self, member: &SocketAddr) {
         if self.members_presence.remove(&member) {
-            let idx = self.members.read().unwrap().iter().position(|e| { e == member }).unwrap();
-            self.members.write().unwrap().remove(idx);
+            let idx = self.members.iter().position(|e| { e == member }).unwrap();
+            self.members.remove(idx);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
@@ -402,12 +409,12 @@ impl Gossip {
     }
 
     fn get_next_member(&mut self) -> Option<SocketAddr> {
-        if self.members.read().unwrap().is_empty() {
+        if self.members.is_empty() {
             return None
         }
 
-        let target = self.members.read().unwrap()[self.next_member_index];
-        self.next_member_index = (self.next_member_index + 1) % self.members.read().unwrap().len();
+        let target = self.members[self.next_member_index];
+        self.next_member_index = (self.next_member_index + 1) % self.members.len();
         Some(target)
     }
 
@@ -418,21 +425,6 @@ impl Gossip {
     }
 }
 
-//pub struct Memberlist {
-//    members: Arc<RwLock<Vec<SocketAddr>>>
-//}
-//
-//impl Memberlist {
-//    fn new(members: Arc<RwLock<Vec<SocketAddr>>>) -> Self {
-//        Memberlist{members}
-//    }
-//
-//    fn get_members(&self) -> Vec<SocketAddr> {
-//        self.members.as_ref().unwrap().clone().read().unwrap().clone()
-//    }
-//}
-//
-//
 pub struct Gossip2 {
     config: ProtocolConfig,
     sender: Option<Sender<ChannelMessage>>,
@@ -447,7 +439,6 @@ impl Gossip2 {
     pub fn join(&mut self, member: IpAddr) {
         let mut gossip = Gossip::new(self.config.clone());
         self.sender = Some(gossip.sender.clone());
-//        gossip.join(member);
         self.handle = Some(std::thread::spawn(move || {
            gossip.join(member);
         }));
@@ -455,6 +446,12 @@ impl Gossip2 {
 
     pub fn stop(&self) {
         self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
+    }
+
+    pub fn get_members(&self) -> Vec<SocketAddr> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
+        receiver.recv().unwrap()
     }
 
     pub fn wait(&mut self) {
