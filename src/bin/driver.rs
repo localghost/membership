@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 use std::str::FromStr;
 use structopt::StructOpt;
-use membership::{Config, Gossip, Gossip2};
+use membership::{Config, Gossip2};
 
 fn main() {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
@@ -14,5 +14,4 @@ fn main() {
     println!("members: {:?}", gossip2.get_members());
     println!("exiting");
     gossip2.stop();
-    gossip2.wait();
 }

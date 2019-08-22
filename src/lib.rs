@@ -16,7 +16,7 @@ use crate::message::{MessageType, Message};
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use std::sync::{Arc, Mutex, RwLock};
 
-#[derive(StructOpt, Default, Clone)]
+#[derive(StructOpt, Default)]
 pub struct ProtocolConfig {
     #[structopt(short="p", long="port", default_value="2345")]
     port: u16,
@@ -113,15 +113,14 @@ pub struct Gossip {
     recv_buffer: [u8; 64],
     myself: SocketAddr,
     requests: VecDeque<Request>,
-    sender: Sender<ChannelMessage>,
     receiver: Receiver<ChannelMessage>,
 }
 
 impl Gossip {
-    pub fn new(config: ProtocolConfig) -> Gossip {
+    fn new(config: ProtocolConfig) -> (Gossip, Sender<ChannelMessage>) {
         let myself = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from_str(&config.bind_address).unwrap(), config.port));
         let (sender, receiver) = mio_extras::channel::channel();
-        Gossip{
+        let gossip = Gossip{
             config,
             server: None,
             members: vec!(),
@@ -133,12 +132,12 @@ impl Gossip {
             recv_buffer: [0; 64],
             myself,
             requests: VecDeque::<Request>::with_capacity(32),
-            sender,
             receiver
-        }
+        };
+        (gossip, sender)
     }
 
-    pub fn join(&mut self, _member: IpAddr) {
+    fn join(&mut self, _member: IpAddr) {
         self.update_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
         let poll = Poll::new().unwrap();
         self.bind(&poll);
@@ -426,35 +425,32 @@ impl Gossip {
 }
 
 pub struct Gossip2 {
-    config: ProtocolConfig,
+    config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<()>>
 }
 
 impl Gossip2 {
     pub fn new(config: ProtocolConfig) -> Self {
-        Gossip2 {config, sender: None, handle: None}
+        Gossip2 {config: Some(config), sender: None, handle: None}
     }
 
     pub fn join(&mut self, member: IpAddr) {
-        let mut gossip = Gossip::new(self.config.clone());
-        self.sender = Some(gossip.sender.clone());
+        let (mut gossip, sender) = Gossip::new(self.config.take().unwrap());
+        self.sender = Some(sender);
         self.handle = Some(std::thread::spawn(move || {
            gossip.join(member);
         }));
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&mut self) {
         self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
+        self.handle.take().unwrap().join();
     }
 
     pub fn get_members(&self) -> Vec<SocketAddr> {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
         receiver.recv().unwrap()
-    }
-
-    pub fn wait(&mut self) {
-        self.handle.take().unwrap().join();
     }
 }
