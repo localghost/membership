@@ -140,8 +140,8 @@ impl Gossip {
     fn join(&mut self, _member: IpAddr) {
         self.update_members(std::iter::once(SocketAddr::new(_member, self.config.port)), std::iter::empty());
         let poll = Poll::new().unwrap();
-        self.bind(&poll);
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty());
+        self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
@@ -424,15 +424,15 @@ impl Gossip {
     }
 }
 
-pub struct Gossip2 {
+pub struct Membership {
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<()>>
 }
 
-impl Gossip2 {
+impl Membership {
     pub fn new(config: ProtocolConfig) -> Self {
-        Gossip2 {config: Some(config), sender: None, handle: None}
+        Membership {config: Some(config), sender: None, handle: None}
     }
 
     pub fn join(&mut self, member: IpAddr) {
@@ -445,12 +445,16 @@ impl Gossip2 {
 
     pub fn stop(&mut self) {
         self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
-        self.handle.take().unwrap().join();
+        self.wait();
     }
 
     pub fn get_members(&self) -> Vec<SocketAddr> {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
         receiver.recv().unwrap()
+    }
+
+    pub fn wait(&mut self) {
+        self.handle.take().unwrap().join();
     }
 }
