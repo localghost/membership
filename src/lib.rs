@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashSet};
 use std::fmt;
-use log::{debug, info};
+use log::{debug, info, warn};
 
 mod message;
 mod unique_circular_buffer;
@@ -354,7 +354,10 @@ impl Gossip {
 
     fn send_letter(&self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
-        self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target).unwrap();
+        match self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target) {
+            Err(e) => warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e),
+            Ok(_) => {}
+        }
     }
 
     fn recv_letter(&mut self) -> IncomingLetter {
