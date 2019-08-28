@@ -114,6 +114,7 @@ pub struct Gossip {
     myself: SocketAddr,
     requests: VecDeque<Request>,
     receiver: Receiver<ChannelMessage>,
+    acks: Vec<Ack>
 }
 
 impl Gossip {
@@ -132,7 +133,8 @@ impl Gossip {
             recv_buffer: [0; 64],
             myself,
             requests: VecDeque::<Request>::with_capacity(32),
-            receiver
+            receiver,
+            acks: Vec::<Ack>::with_capacity(32)
         };
         (gossip, sender)
     }
@@ -145,7 +147,6 @@ impl Gossip {
 
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
-        let mut acks = Vec::<Ack>::with_capacity(32);
 
         let initial_ping = Request::Ping(Header{
             // the member we were given to join should be on the alive members list
@@ -160,123 +161,7 @@ impl Gossip {
             for event in events.iter() {
                 match event.token() {
                     Token(0) => {
-                        if event.readiness().is_readable() {
-                            let letter = self.recv_letter();
-                            match letter.message.get_type() {
-                                message::MessageType::PingIndirect => {
-                                    self.update_members(
-                                        letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
-                                        letter.message.get_dead_members().into_iter()
-                                    );
-                                }
-                                _ => {
-                                    self.update_members(
-                                        letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
-                                        letter.message.get_dead_members().into_iter()
-                                    );
-                                }
-                            }
-                            match letter.message.get_type() {
-                                message::MessageType::Ping => {
-                                    self.requests.push_back(Request::Ack(
-                                        Header {
-                                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                        },
-                                    ));
-                                }
-                                message::MessageType::PingAck => {
-                                    for ack in acks.drain(..).collect::<Vec<_>>() {
-                                        match ack.request {
-                                            Request::PingIndirect(ref header) => {
-                                                if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                                    continue;
-                                                }
-                                            }
-                                            Request::PingProxy(ref header, ref reply_to) => {
-                                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                                    self.requests.push_back(Request::AckIndirect(
-                                                        Header {
-                                                            target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                                        },
-                                                        letter.sender
-                                                    ));
-                                                    continue;
-                                                }
-                                            }
-                                            Request::Ping(ref header) => {
-                                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                                    continue;
-                                                }
-                                            }
-                                            _ => unreachable!()
-                                        }
-                                        acks.push(ack);
-                                    }
-                                }
-                                message::MessageType::PingIndirect => {
-                                    self.requests.push_back(Request::PingProxy(
-                                        Header {
-                                            target: letter.message.get_alive_members()[0],
-                                            sequence_number: letter.message.get_sequence_number(),
-                                            epoch: letter.message.get_epoch()
-                                        },
-                                        letter.sender
-                                    ))
-                                }
-                            }
-                        } else if event.readiness().is_writable() {
-                            if let Some(request) = self.requests.pop_front() {
-                                debug!("{:?}", request);
-                                match request {
-                                    Request::Ping(ref header) => {
-                                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
-                                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                                        // as that may lead to late failure discovery
-                                        message.with_members(
-                                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
-                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                        );
-                                        self.send_letter(OutgoingLetter { message, target: header.target });
-                                        acks.push(Ack::new(request));
-                                    }
-                                    Request::PingIndirect(ref header) => {
-                                        // FIXME do not send the message to the member that is being suspected
-                                        for member in self.members.iter().take(self.config.num_indirect as usize) {
-                                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
-                                            // filter is needed to not include target node on the alive list as it is being suspected
-                                            message.with_members(
-                                                &std::iter::once(&header.target).chain(self.members.iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
-                                                &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                            );
-                                            self.send_letter(OutgoingLetter { message, target: *member });
-                                        }
-                                        acks.push(Ack::new(request));
-                                    },
-                                    Request::PingProxy(ref header, ..) => {
-                                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
-                                        message.with_members(
-                                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
-                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                        );
-                                        self.send_letter(OutgoingLetter{ message, target: header.target });
-                                        acks.push(Ack::new(request));
-                                    }
-                                    Request::Ack(header) => {
-                                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
-                                        self.send_letter(OutgoingLetter { message, target: header.target });
-                                    }
-                                    Request::AckIndirect(header, member) => {
-                                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                                        message.with_members(
-                                            &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
-                                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
-                                        );
-                                        self.send_letter(OutgoingLetter { message, target: header.target });
-                                    }
-                                }
-                            }
-                        }
+                        self.handle_protocol_event(&event);
                     }
                     Token(1) => {
                         match self.receiver.try_recv() {
@@ -304,11 +189,11 @@ impl Gossip {
 
             let now = std::time::Instant::now();
 
-            for ack in acks.drain(..).collect::<Vec<_>>() {
+            for ack in self.acks.drain(..).collect::<Vec<_>>() {
                 if now > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
                     self.handle_timeout_ack(ack);
                 } else {
-                    acks.push(ack);
+                    self.acks.push(ack);
                 }
             }
 
@@ -354,17 +239,23 @@ impl Gossip {
 
     fn send_letter(&self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
-        match self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target) {
-            Err(e) => warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e),
-            Ok(_) => {}
+        if let Err(e) = self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target) {
+            warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e);
         }
     }
 
-    fn recv_letter(&mut self) -> IncomingLetter {
-        let (count, sender) = self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer).unwrap();
-        let letter = IncomingLetter{sender, message: message::Message::from_bytes(&self.recv_buffer, count)};
-        debug!("{:?}", letter);
-        letter
+    fn recv_letter(&mut self) -> Option<IncomingLetter> {
+        match self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
+            Ok((count, sender)) => {
+                let letter = IncomingLetter{sender, message: message::Message::from_bytes(&self.recv_buffer, count)};
+                debug!("{:?}", letter);
+                Some(letter)
+            }
+            Err(e) => {
+                warn!("Failed to receive letter due to {:?}", e);
+                None
+            }
+        }
     }
 
     fn update_members<T1, T2>(&mut self, alive: T1, dead: T2)
@@ -424,6 +315,134 @@ impl Gossip {
         let sequence_number = self.sequence_number;
         self.sequence_number += 1;
         sequence_number
+    }
+
+    fn handle_protocol_event(&mut self, event: &Event) {
+        if event.readiness().is_readable() {
+            let letter = self.recv_letter();
+            if letter.is_none() {
+                return;
+            }
+            let letter = letter.unwrap();
+            self.update_members_from_letter(&letter);
+            match letter.message.get_type() {
+                message::MessageType::Ping => {
+                    self.requests.push_back(Request::Ack(
+                        Header {
+                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                        },
+                    ));
+                }
+                message::MessageType::PingAck => {
+                    for ack in self.acks.drain(..).collect::<Vec<_>>() {
+                        match ack.request {
+                            Request::PingIndirect(ref header) => {
+                                if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                    continue;
+                                }
+                            }
+                            Request::PingProxy(ref header, ref reply_to) => {
+                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                    self.requests.push_back(Request::AckIndirect(
+                                        Header {
+                                            target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                                        },
+                                        letter.sender
+                                    ));
+                                    continue;
+                                }
+                            }
+                            Request::Ping(ref header) => {
+                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                                    continue;
+                                }
+                            }
+                            _ => unreachable!()
+                        }
+                        self.acks.push(ack);
+                    }
+                }
+                message::MessageType::PingIndirect => {
+                    self.requests.push_back(Request::PingProxy(
+                        Header {
+                            target: letter.message.get_alive_members()[0],
+                            sequence_number: letter.message.get_sequence_number(),
+                            epoch: letter.message.get_epoch()
+                        },
+                        letter.sender
+                    ))
+                }
+            }
+        } else if event.readiness().is_writable() {
+            if let Some(request) = self.requests.pop_front() {
+                debug!("{:?}", request);
+                match request {
+                    Request::Ping(ref header) => {
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                        // as that may lead to late failure discovery
+                        message.with_members(
+                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                        );
+                        self.send_letter(OutgoingLetter { message, target: header.target });
+                        self.acks.push(Ack::new(request));
+                    }
+                    Request::PingIndirect(ref header) => {
+                        // FIXME do not send the message to the member that is being suspected
+                        for member in self.members.iter().take(self.config.num_indirect as usize) {
+                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                            // filter is needed to not include target node on the alive list as it is being suspected
+                            message.with_members(
+                                &std::iter::once(&header.target).chain(self.members.iter().filter(|&m|{*m != header.target})).cloned().collect::<Vec<_>>(),
+                                &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                            );
+                            self.send_letter(OutgoingLetter { message, target: *member });
+                        }
+                        self.acks.push(Ack::new(request));
+                    },
+                    Request::PingProxy(ref header, ..) => {
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                        message.with_members(
+                            &self.members.iter().filter(|&member|{*member != header.target}).cloned().collect::<Vec<_>>(),
+                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                        );
+                        self.send_letter(OutgoingLetter{ message, target: header.target });
+                        self.acks.push(Ack::new(request));
+                    }
+                    Request::Ack(header) => {
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                        self.send_letter(OutgoingLetter { message, target: header.target });
+                    }
+                    Request::AckIndirect(header, member) => {
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                        message.with_members(
+                            &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
+                            &self.dead_members.iter().cloned().collect::<Vec<_>>()
+                        );
+                        self.send_letter(OutgoingLetter { message, target: header.target });
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_members_from_letter(&mut self, letter: &IncomingLetter) {
+        match letter.message.get_type() {
+            message::MessageType::PingIndirect => {
+                self.update_members(
+                    letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
+                    letter.message.get_dead_members().into_iter()
+                );
+            }
+            _ => {
+                self.update_members(
+                    letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
+                    letter.message.get_dead_members().into_iter()
+                );
+            }
+        }
     }
 }
 
