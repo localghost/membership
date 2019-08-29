@@ -319,58 +319,12 @@ impl Gossip {
 
     fn handle_protocol_event(&mut self, event: &Event) {
         if event.readiness().is_readable() {
-            let letter = self.recv_letter();
-            if letter.is_none() {
-                return;
-            }
-            let letter = letter.unwrap();
-            self.update_members_from_letter(&letter);
-            match letter.message.get_type() {
-                message::MessageType::Ping => {
-                    self.requests.push_back(Request::Ack(
-                        Header {
-                            target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                        },
-                    ));
-                }
-                message::MessageType::PingAck => {
-                    for ack in self.acks.drain(..).collect::<Vec<_>>() {
-                        match ack.request {
-                            Request::PingIndirect(ref header) => {
-                                if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                    continue;
-                                }
-                            }
-                            Request::PingProxy(ref header, ref reply_to) => {
-                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                    self.requests.push_back(Request::AckIndirect(
-                                        Header {
-                                            target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
-                                        },
-                                        letter.sender
-                                    ));
-                                    continue;
-                                }
-                            }
-                            Request::Ping(ref header) => {
-                                if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
-                                    continue;
-                                }
-                            }
-                            _ => unreachable!()
-                        }
-                        self.acks.push(ack);
-                    }
-                }
-                message::MessageType::PingIndirect => {
-                    self.requests.push_back(Request::PingProxy(
-                        Header {
-                            target: letter.message.get_alive_members()[0],
-                            sequence_number: letter.message.get_sequence_number(),
-                            epoch: letter.message.get_epoch()
-                        },
-                        letter.sender
-                    ))
+            if let Some(letter) = self.recv_letter() {
+                self.update_members_from_letter(&letter);
+                match letter.message.get_type() {
+                    message::MessageType::Ping => self.handle_ping(&letter),
+                    message::MessageType::PingAck => self.handle_ack(&letter),
+                    message::MessageType::PingIndirect => self.handle_indirect_ping(&letter)
                 }
             }
         } else if event.readiness().is_writable() {
@@ -430,19 +384,66 @@ impl Gossip {
 
     fn update_members_from_letter(&mut self, letter: &IncomingLetter) {
         match letter.message.get_type() {
-            message::MessageType::PingIndirect => {
+            message::MessageType::PingIndirect =>
                 self.update_members(
                     letter.message.get_alive_members().into_iter().skip(1).chain(std::iter::once(letter.sender)),
                     letter.message.get_dead_members().into_iter()
-                );
-            }
-            _ => {
+                ),
+            _ =>
                 self.update_members(
                     letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
                     letter.message.get_dead_members().into_iter()
-                );
-            }
+                ),
         }
+    }
+
+    fn handle_ack(&mut self, letter: &IncomingLetter) {
+        for ack in self.acks.drain(..).collect::<Vec<_>>() {
+            match ack.request {
+                Request::PingIndirect(ref header) => {
+                    if letter.message.get_alive_members()[0] == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                        continue;
+                    }
+                }
+                Request::PingProxy(ref header, ref reply_to) => {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                        self.requests.push_back(Request::AckIndirect(
+                            Header {
+                                target: *reply_to, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+                            },
+                            letter.sender
+                        ));
+                        continue;
+                    }
+                }
+                Request::Ping(ref header) => {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                        continue;
+                    }
+                }
+                _ => unreachable!()
+            }
+            self.acks.push(ack);
+        }
+    }
+
+    fn handle_ping(&mut self, letter: &IncomingLetter) {
+        self.requests.push_back(Request::Ack(
+            Header {
+                target: letter.sender, epoch: letter.message.get_epoch(), sequence_number: letter.message.get_sequence_number()
+            },
+        ));
+    }
+
+    fn handle_indirect_ping(&mut self, letter: &IncomingLetter) {
+        self.requests.push_back(Request::PingProxy(
+            Header {
+                target: letter.message.get_alive_members()[0],
+                sequence_number: letter.message.get_sequence_number(),
+                epoch: letter.message.get_epoch()
+            },
+            letter.sender
+        ));
     }
 }
 
