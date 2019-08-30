@@ -5,9 +5,14 @@ authors = ["Zbigniew Kostrzewa <kostrzewa@9livesdata.com>"]
 edition = "2018"
 
 [dependencies]
-mio = "0.6.19"
+mio = "0.6.15"
 mio-extras = "2.0.5"
 structopt = "0.2.15"
 bytes = "0.4.12"
 log = "0.4.6"
 env_logger = "0.6.1"
+
+[dev-dependencies]
+tokio-core = "0.1.17"
+netsim = "0.2.5"
+get_if
