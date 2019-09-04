@@ -1,41 +1,28 @@
-//use futures::Future;
-use getaddrs;
-use libc;
 use membership;
-use tun_tap::Iface;
+
+mod common;
 
 #[test]
 fn simple_test() {
-    //    use netsim::spawn;
-
-    println!("{}", "OUTSIDE THREAD");
-    for addr in getaddrs::InterfaceAddrs::query_system().unwrap() {
-        println!("{:?}", addr.name);
-    }
-
     std::thread::spawn(|| {
-        println!("{}", "IN THREAD");
-        unsafe {
-            println!("{}", libc::unshare(libc::CLONE_NEWNET));
-        }
-        let iface = tun_tap::Iface::new("myiface", tun_tap::Mode::Tap).unwrap();
-        for addr in getaddrs::InterfaceAddrs::query_system().unwrap() {
-            println!("{:?}", addr.name);
-        }
-        std::thread::spawn(|| {
-            println!("{}", "IN INNER THREAD");
-            for addr in getaddrs::InterfaceAddrs::query_system().unwrap() {
-                println!("{:?}", addr.name);
-            }
-        })
-        .join();
+        common::unshare_netns();
+        common::create_tun_interface("192.168.0.1/24");
+        common::create_tun_interface("192.168.0.2/24");
+        println!(
+            "{:?}",
+            std::process::Command::new("ping")
+                .args(&["-c1", "-W1", "192.168.0.1"])
+                .output()
+                .unwrap()
+        );
+        println!(
+            "{:?}",
+            std::process::Command::new("ip")
+                .args(&["address"])
+                .output()
+                .unwrap()
+        );
     })
-    .join();
-    //    let spawn = spawn::new_namespace(|| {
-    //        println!("{}", "IN NEW NAMESPACE");
-    //        std::thread::spawn(|| {
-    //        })
-    //        .join();
-    //    });
-    //    spawn.wait();
+    .join()
+    .unwrap();
 }
