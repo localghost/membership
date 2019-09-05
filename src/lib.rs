@@ -149,6 +149,8 @@ impl Gossip {
     }
 
     fn join(&mut self, member: SocketAddr) {
+        assert_ne!(member, self.myself, "Can't join yourself");
+
         self.update_members(std::iter::once(member), std::iter::empty());
         let poll = Poll::new().unwrap();
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty());
@@ -522,7 +524,9 @@ impl Membership {
         }
     }
 
-    pub fn join(&mut self, member: IpAddr) {
+    pub fn join(&mut self, member: SocketAddr) {
+        assert_ne!(member, self.bind_address, "Can't join yourself");
+
         let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
         self.handle = Some(std::thread::spawn(move || {
