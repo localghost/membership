@@ -16,14 +16,8 @@ use crate::message::{Message, MessageType};
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use std::sync::{Arc, Mutex, RwLock};
 
-#[derive(StructOpt, Default)]
+#[derive(StructOpt)]
 pub struct ProtocolConfig {
-    #[structopt(short = "p", long = "port", default_value = "2345")]
-    pub port: u16,
-
-    #[structopt(short = "b", long = "bind-address", default_value = "127.0.0.1")]
-    pub bind_address: String,
-
     #[structopt(short = "o", long = "proto-period", default_value = "5")]
     pub protocol_period: u64,
 
@@ -34,10 +28,23 @@ pub struct ProtocolConfig {
     pub num_indirect: u8,
 }
 
-#[derive(StructOpt, Default)]
+impl Default for ProtocolConfig {
+    fn default() -> Self {
+        Self {
+            protocol_period: 5,
+            ack_timeout: 1,
+            num_indirect: 3,
+        }
+    }
+}
+
+#[derive(StructOpt)]
 pub struct Config {
-    #[structopt(short = "j", long = "join-address", default_value = "127.0.0.1")]
-    pub join_address: String,
+    #[structopt(short = "j", long = "join-address", default_value = "127.0.0.1:2345")]
+    pub join_address: SocketAddr,
+
+    #[structopt(short = "b", long = "bind-address", default_value = "127.0.0.1:2345")]
+    pub bind_address: SocketAddr,
 
     // FIXME: this should not be public, fix dependencies between the two configs, make clear which is about protocol
     // and which about client properties.
@@ -52,11 +59,7 @@ struct OutgoingLetter {
 
 impl fmt::Debug for OutgoingLetter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "OutgoingLetter {{ target: {}, message: {:?} }}",
-            self.target, self.message
-        )
+        write!(f, "OutgoingLetter {{ target: {}, message: {:?} }}", self.target, self.message)
     }
 }
 
@@ -67,11 +70,7 @@ struct IncomingLetter {
 
 impl fmt::Debug for IncomingLetter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "IncomingLetter {{ sender: {}, message: {:?} }}",
-            self.sender, self.message
-        )
+        write!(f, "IncomingLetter {{ sender: {}, message: {:?} }}", self.sender, self.message)
     }
 }
 
@@ -129,11 +128,7 @@ pub struct Gossip {
 }
 
 impl Gossip {
-    fn new(config: ProtocolConfig) -> (Gossip, Sender<ChannelMessage>) {
-        let myself = SocketAddr::V4(SocketAddrV4::new(
-            Ipv4Addr::from_str(&config.bind_address).unwrap(),
-            config.port,
-        ));
+    fn new(bind_address: SocketAddr, config: ProtocolConfig) -> (Gossip, Sender<ChannelMessage>) {
         let (sender, receiver) = mio_extras::channel::channel();
         let gossip = Gossip {
             config,
@@ -145,7 +140,7 @@ impl Gossip {
             epoch: 0,
             sequence_number: 0,
             recv_buffer: [0; 64],
-            myself,
+            myself: bind_address,
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
@@ -153,18 +148,10 @@ impl Gossip {
         (gossip, sender)
     }
 
-    fn join(&mut self, _member: IpAddr) {
-        self.update_members(
-            std::iter::once(SocketAddr::new(_member, self.config.port)),
-            std::iter::empty(),
-        );
+    fn join(&mut self, member: SocketAddr) {
+        self.update_members(std::iter::once(member), std::iter::empty());
         let poll = Poll::new().unwrap();
-        poll.register(
-            &self.receiver,
-            Token(1),
-            Ready::readable(),
-            PollOpt::empty(),
-        );
+        poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty());
         self.bind(&poll);
 
         let mut events = Events::with_capacity(1024);
@@ -179,8 +166,7 @@ impl Gossip {
         self.requests.push_front(initial_ping);
 
         'mainloop: loop {
-            poll.poll(&mut events, Some(Duration::from_millis(100)))
-                .unwrap();
+            poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
             for event in events.iter() {
                 match event.token() {
                     Token(0) => {
@@ -255,10 +241,7 @@ impl Gossip {
     }
 
     fn bind(&mut self, poll: &Poll) {
-        let address = format!("{}:{}", self.config.bind_address, self.config.port)
-            .parse()
-            .unwrap();
-        self.server = Some(UdpSocket::bind(&address).unwrap());
+        self.server = Some(UdpSocket::bind(&self.myself).unwrap());
         // FIXME: change to `PollOpt::edge()`
         poll.register(
             self.server.as_ref().unwrap(),
@@ -271,26 +254,13 @@ impl Gossip {
 
     fn send_letter(&self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
-        if let Err(e) = self
-            .server
-            .as_ref()
-            .unwrap()
-            .send_to(&letter.message.into_inner(), &letter.target)
-        {
-            warn!(
-                "Letter to {:?} was not delivered due to {:?}",
-                letter.target, e
-            );
+        if let Err(e) = self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target) {
+            warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e);
         }
     }
 
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
-        match self
-            .server
-            .as_ref()
-            .unwrap()
-            .recv_from(&mut self.recv_buffer)
-        {
+        match self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
             Ok((count, sender)) => {
                 let letter = IncomingLetter {
                     sender,
@@ -388,11 +358,7 @@ impl Gossip {
                 debug!("{:?}", request);
                 match request {
                     Request::Ping(ref header) => {
-                        let mut message = Message::create(
-                            MessageType::Ping,
-                            header.sequence_number,
-                            header.epoch,
-                        );
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
                         // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                         // as that may lead to late failure discovery
                         message.with_members(
@@ -413,11 +379,7 @@ impl Gossip {
                     Request::PingIndirect(ref header) => {
                         // FIXME do not send the message to the member that is being suspected
                         for member in self.members.iter().take(self.config.num_indirect as usize) {
-                            let mut message = Message::create(
-                                MessageType::PingIndirect,
-                                header.sequence_number,
-                                header.epoch,
-                            );
+                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                             // filter is needed to not include target node on the alive list as it is being suspected
                             message.with_members(
                                 &std::iter::once(&header.target)
@@ -426,19 +388,12 @@ impl Gossip {
                                     .collect::<Vec<_>>(),
                                 &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                             );
-                            self.send_letter(OutgoingLetter {
-                                message,
-                                target: *member,
-                            });
+                            self.send_letter(OutgoingLetter { message, target: *member });
                         }
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingProxy(ref header, ..) => {
-                        let mut message = Message::create(
-                            MessageType::Ping,
-                            header.sequence_number,
-                            header.epoch,
-                        );
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
                         message.with_members(
                             &self
                                 .members
@@ -455,31 +410,17 @@ impl Gossip {
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {
-                        let mut message = Message::create(
-                            MessageType::PingAck,
-                            header.sequence_number,
-                            header.epoch,
-                        );
-                        message.with_members(
-                            &self.members,
-                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        );
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
                         self.send_letter(OutgoingLetter {
                             message,
                             target: header.target,
                         });
                     }
                     Request::AckIndirect(header, member) => {
-                        let mut message = Message::create(
-                            MessageType::PingAck,
-                            header.sequence_number,
-                            header.epoch,
-                        );
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
-                            &std::iter::once(&member)
-                                .chain(self.members.iter())
-                                .cloned()
-                                .collect::<Vec<_>>(),
+                            &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
                         self.send_letter(OutgoingLetter {
@@ -504,11 +445,7 @@ impl Gossip {
                 letter.message.get_dead_members().into_iter(),
             ),
             _ => self.update_members(
-                letter
-                    .message
-                    .get_alive_members()
-                    .into_iter()
-                    .chain(std::iter::once(letter.sender)),
+                letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
                 letter.message.get_dead_members().into_iter(),
             ),
         }
@@ -525,9 +462,7 @@ impl Gossip {
                     }
                 }
                 Request::PingProxy(ref header, ref reply_to) => {
-                    if letter.sender == header.target
-                        && letter.message.get_sequence_number() == header.sequence_number
-                    {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 target: *reply_to,
@@ -540,9 +475,7 @@ impl Gossip {
                     }
                 }
                 Request::Ping(ref header) => {
-                    if letter.sender == header.target
-                        && letter.message.get_sequence_number() == header.sequence_number
-                    {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
                         continue;
                     }
                 }
@@ -573,14 +506,16 @@ impl Gossip {
 }
 
 pub struct Membership {
+    bind_address: SocketAddr,
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Membership {
-    pub fn new(config: ProtocolConfig) -> Self {
+    pub fn new(bind_address: SocketAddr, config: ProtocolConfig) -> Self {
         Membership {
+            bind_address,
             config: Some(config),
             sender: None,
             handle: None,
@@ -588,7 +523,7 @@ impl Membership {
     }
 
     pub fn join(&mut self, member: IpAddr) {
-        let (mut gossip, sender) = Gossip::new(self.config.take().unwrap());
+        let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
         self.handle = Some(std::thread::spawn(move || {
             gossip.join(member);
@@ -602,10 +537,7 @@ impl Membership {
 
     pub fn get_members(&self) -> Vec<SocketAddr> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.sender
-            .as_ref()
-            .unwrap()
-            .send(ChannelMessage::GetMembers(sender));
+        self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
         receiver.recv().unwrap()
     }
 
