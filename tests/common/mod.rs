@@ -1,9 +1,6 @@
 pub fn create_tun_interface(cidr: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-    let name = format!(
-        "tun{}",
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-    );
+    let name = format!("tun{}", COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
     assert!(std::process::Command::new("ip")
         .args(&["tuntap", "add", "mode", "tun", &name])
         .output()
@@ -48,4 +45,17 @@ pub fn unshare_netns() {
         .unwrap()
         .status
         .success());
+}
+
+pub fn in_namespace<F>(code: F)
+where
+    F: FnOnce() -> () + Send + 'static,
+{
+    std::thread::spawn(|| {
+        unshare_netns();
+
+        code();
+    })
+    .join()
+    .unwrap();
 }

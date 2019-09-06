@@ -9,8 +9,7 @@ mod common;
 fn simple_test() {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    std::thread::spawn(|| {
-        common::unshare_netns();
+    common::in_namespace(|| {
         common::create_tun_interface("192.168.0.1/24");
         common::create_tun_interface("192.168.0.2/24");
 
@@ -31,7 +30,5 @@ fn simple_test() {
 
         m1.stop();
         m2.stop();
-    })
-    .join()
-    .unwrap();
+    });
 }
