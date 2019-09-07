@@ -59,3 +59,13 @@ where
     .join()
     .unwrap();
 }
+
+//pub fn compare_unordered<T, F>(mut s1: &[T], mut s2: &[T], mut compare: F)
+//where
+//    F: FnMut(&T, &T) -> std::cmp::Ordering + Clone,
+//{
+//    s1.sort_by(compare.clone());
+//    s2.sort_by(compare);
+//
+//    assert!(s1.cmp(s2));
+//}

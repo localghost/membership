@@ -7,16 +7,19 @@ mod common;
 
 #[test]
 fn simple_test() {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-
+    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     common::in_namespace(|| {
-        common::create_tun_interface("192.168.0.1/24");
-        common::create_tun_interface("192.168.0.2/24");
+        let addresses = vec!["192.168.0.1", "192.168.0.2", "192.168.0.3"];
+        for address in &addresses {
+            common::create_tun_interface(&format!("{}/24", address));
+        }
 
-        let mut m1 = membership::Membership::new(SocketAddr::from_str("192.168.0.1:2345").unwrap(), Default::default());
-        let mut m2 = membership::Membership::new(SocketAddr::from_str("192.168.0.2:2345").unwrap(), Default::default());
-        m1.join(SocketAddr::from_str("192.168.0.2:2345").unwrap());
-        m2.join(SocketAddr::from_str("192.168.0.1:2345").unwrap());
+        let mut ms: Vec<membership::Membership> = Vec::new();
+        for (index, address) in addresses.iter().enumerate() {
+            let mut m = membership::Membership::new(SocketAddr::from_str(&format!("{}:2345", address)).unwrap(), Default::default());
+            m.join(SocketAddr::from_str(&format!("{}:2345", addresses[(index + 1) % addresses.len()])).unwrap());
+            ms.push(m);
+        }
 
         std::thread::sleep(Duration::from_secs(10));
 
@@ -25,10 +28,17 @@ fn simple_test() {
             SocketAddr::from_str("192.168.0.1:2345").unwrap(),
             SocketAddr::from_str("192.168.0.2:2345").unwrap(),
         ];
-        assert_eq!(m1.get_members().sort_by(sort_fn), expected_members.sort_by(sort_fn));
-        assert_eq!(m2.get_members().sort_by(sort_fn), expected_members.sort_by(sort_fn));
+        expected_members.sort_by(sort_fn);
+        let expected_memebers = expected_members;
 
-        m1.stop();
-        m2.stop();
+        for m in &ms {
+            let mut members = m.get_members();
+            members.sort_by(sort_fn);
+            assert_eq!(members, expected_members);
+        }
+
+        for m in &mut ms {
+            m.stop();
+        }
     });
 }
