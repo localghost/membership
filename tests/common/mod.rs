@@ -1,3 +1,6 @@
+use std::net::SocketAddr;
+use std::str::FromStr;
+
 pub fn create_tun_interface(cidr: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
     let name = format!("tun{}", COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
@@ -58,4 +61,28 @@ where
     })
     .join()
     .unwrap();
+}
+
+pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
+    let addresses = (1..=num_interfaces)
+        .map(|i| format!("192.168.0.{}", i))
+        .collect::<Vec<String>>();
+    addresses
+        .iter()
+        .for_each(|address| create_tun_interface(&format!("{}/24", address)));
+    addresses
+}
+
+pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership> {
+    let mut ms: Vec<membership::Membership> = Vec::new();
+    for (index, address) in addresses.iter().enumerate() {
+        let bind_address = SocketAddr::from_str(&format!("{}:2345", address)).unwrap();
+        let join_address = SocketAddr::from_str(&format!("{}:2345", addresses[(index + 1) % addresses.len()])).unwrap();
+
+        let mut m = membership::Membership::new(bind_address, Default::default());
+        m.join(join_address);
+
+        ms.push(m);
+    }
+    ms
 }
