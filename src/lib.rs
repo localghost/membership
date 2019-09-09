@@ -512,6 +512,7 @@ pub struct Membership {
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<()>>,
+    stopped: bool,
 }
 
 impl Membership {
@@ -521,31 +522,40 @@ impl Membership {
             config: Some(config),
             sender: None,
             handle: None,
+            stopped: true,
         }
     }
 
     pub fn join(&mut self, member: SocketAddr) {
         assert_ne!(member, self.bind_address, "Can't join yourself");
+        assert!(self.stopped);
 
         let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
         self.handle = Some(std::thread::spawn(move || {
             gossip.join(member);
         }));
+        self.stopped = false;
     }
 
     pub fn stop(&mut self) {
+        assert!(!self.stopped);
+
         self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
         self.wait();
+        self.stopped = true;
     }
 
     pub fn get_members(&self) -> Vec<SocketAddr> {
+        assert!(!self.stopped);
+
         let (sender, receiver) = std::sync::mpsc::channel();
         self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
         receiver.recv().unwrap()
     }
 
     pub fn wait(&mut self) {
+        assert!(!self.stopped);
         self.handle.take().unwrap().join();
     }
 }
