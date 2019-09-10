@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use failure::{Fail, ResultExt};
 use mio::net::*;
 use mio::*;
 use mio_extras::channel::{Receiver, Sender};
@@ -6,16 +6,18 @@ use std::collections::vec_deque::VecDeque;
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::str::FromStr;
 use std::time::Duration;
 use structopt::StructOpt;
-
 mod message;
+
 mod unique_circular_buffer;
 use crate::message::{Message, MessageType};
 use crate::unique_circular_buffer::UniqueCircularBuffer;
+use log::{debug, info, warn};
+use std::sync::mpsc::SendError;
 use std::sync::{Arc, Mutex, RwLock};
 
+//#[deny(missing_docs)]
 #[derive(StructOpt)]
 pub struct ProtocolConfig {
     #[structopt(short = "o", long = "proto-period", default_value = "5")]
@@ -38,20 +40,6 @@ impl Default for ProtocolConfig {
     }
 }
 
-#[derive(StructOpt)]
-pub struct Config {
-    #[structopt(short = "j", long = "join-address", default_value = "127.0.0.1:2345")]
-    pub join_address: SocketAddr,
-
-    #[structopt(short = "b", long = "bind-address", default_value = "127.0.0.1:2345")]
-    pub bind_address: SocketAddr,
-
-    // FIXME: this should not be public, fix dependencies between the two configs, make clear which is about protocol
-    // and which about client properties.
-    #[structopt(flatten)]
-    pub proto_config: ProtocolConfig,
-}
-
 struct OutgoingLetter {
     target: SocketAddr,
     message: message::Message,
@@ -59,7 +47,11 @@ struct OutgoingLetter {
 
 impl fmt::Debug for OutgoingLetter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OutgoingLetter {{ target: {}, message: {:?} }}", self.target, self.message)
+        write!(
+            f,
+            "OutgoingLetter {{ target: {}, message: {:?} }}",
+            self.target, self.message
+        )
     }
 }
 
@@ -70,7 +62,11 @@ struct IncomingLetter {
 
 impl fmt::Debug for IncomingLetter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "IncomingLetter {{ sender: {}, message: {:?} }}", self.sender, self.message)
+        write!(
+            f,
+            "IncomingLetter {{ sender: {}, message: {:?} }}",
+            self.sender, self.message
+        )
     }
 }
 
@@ -111,7 +107,7 @@ enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
-pub struct Gossip {
+struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
@@ -256,7 +252,12 @@ impl Gossip {
 
     fn send_letter(&self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
-        if let Err(e) = self.server.as_ref().unwrap().send_to(&letter.message.into_inner(), &letter.target) {
+        if let Err(e) = self
+            .server
+            .as_ref()
+            .unwrap()
+            .send_to(&letter.message.into_inner(), &letter.target)
+        {
             warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e);
         }
     }
@@ -381,7 +382,8 @@ impl Gossip {
                     Request::PingIndirect(ref header) => {
                         // FIXME do not send the message to the member that is being suspected
                         for member in self.members.iter().take(self.config.num_indirect as usize) {
-                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                            let mut message =
+                                Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                             // filter is needed to not include target node on the alive list as it is being suspected
                             message.with_members(
                                 &std::iter::once(&header.target)
@@ -390,7 +392,10 @@ impl Gossip {
                                     .collect::<Vec<_>>(),
                                 &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                             );
-                            self.send_letter(OutgoingLetter { message, target: *member });
+                            self.send_letter(OutgoingLetter {
+                                message,
+                                target: *member,
+                            });
                         }
                         self.acks.push(Ack::new(request));
                     }
@@ -422,7 +427,10 @@ impl Gossip {
                     Request::AckIndirect(header, member) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
-                            &std::iter::once(&member).chain(self.members.iter()).cloned().collect::<Vec<_>>(),
+                            &std::iter::once(&member)
+                                .chain(self.members.iter())
+                                .cloned()
+                                .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
                         self.send_letter(OutgoingLetter {
@@ -447,7 +455,11 @@ impl Gossip {
                 letter.message.get_dead_members().into_iter(),
             ),
             _ => self.update_members(
-                letter.message.get_alive_members().into_iter().chain(std::iter::once(letter.sender)),
+                letter
+                    .message
+                    .get_alive_members()
+                    .into_iter()
+                    .chain(std::iter::once(letter.sender)),
                 letter.message.get_dead_members().into_iter(),
             ),
         }
@@ -464,7 +476,8 @@ impl Gossip {
                     }
                 }
                 Request::PingProxy(ref header, ref reply_to) => {
-                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number
+                    {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 target: *reply_to,
@@ -477,7 +490,8 @@ impl Gossip {
                     }
                 }
                 Request::Ping(ref header) => {
-                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number {
+                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number
+                    {
                         continue;
                     }
                 }
@@ -512,7 +526,6 @@ pub struct Membership {
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<()>>,
-    stopped: bool,
 }
 
 impl Membership {
@@ -522,40 +535,47 @@ impl Membership {
             config: Some(config),
             sender: None,
             handle: None,
-            stopped: true,
         }
     }
 
     pub fn join(&mut self, member: SocketAddr) {
         assert_ne!(member, self.bind_address, "Can't join yourself");
-        assert!(self.stopped);
+        assert!(self.handle.is_none(), "You have already joined");
 
         let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
         self.handle = Some(std::thread::spawn(move || {
             gossip.join(member);
         }));
-        self.stopped = false;
     }
 
     pub fn stop(&mut self) {
-        assert!(!self.stopped);
+        assert!(self.handle.is_some(), "You have not joined yet");
 
         self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
         self.wait();
-        self.stopped = true;
     }
 
-    pub fn get_members(&self) -> Vec<SocketAddr> {
-        assert!(!self.stopped);
+    pub fn get_members(&self) -> Result<Vec<SocketAddr>, failure::Error> {
+        assert!(self.handle.is_some(), "First you have to join");
 
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.sender.as_ref().unwrap().send(ChannelMessage::GetMembers(sender));
-        receiver.recv().unwrap()
+        self.sender
+            .as_ref()
+            .unwrap()
+            .send(ChannelMessage::GetMembers(sender))
+            .map_err(|e| failure::format_err!("Failed to ask for members: {:?}", e))?;
+        receiver
+            .recv()
+            .map_err(|e| failure::format_err!("Failed to get members: {:?}", e))
     }
 
-    pub fn wait(&mut self) {
-        assert!(!self.stopped);
-        self.handle.take().unwrap().join();
+    pub fn wait(&mut self) -> Result<(), failure::Error> {
+        assert!(self.handle.is_some(), "You have not joined yet");
+        self.handle
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|e| failure::format_err!("Membership thread panicked: {:?}", e))
     }
 }
