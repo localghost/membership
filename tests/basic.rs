@@ -15,13 +15,14 @@ fn all_members_alive() {
         for m in &ms {
             let mut member_addresses = m
                 .get_members()
+                .unwrap()
                 .iter()
                 .map(|member| member.ip().to_string())
                 .collect::<Vec<_>>();
             member_addresses.sort();
             assert_eq!(addresses, member_addresses);
         }
-        ms.iter_mut().for_each(membership::Membership::stop);
+        ms.iter_mut().for_each(|m| m.stop().unwrap());
     });
 }
 
@@ -37,6 +38,7 @@ fn dead_node_discovered() {
         for m in &ms {
             let mut member_addresses = m
                 .get_members()
+                .unwrap()
                 .iter()
                 .map(|member| member.ip().to_string())
                 .collect::<Vec<_>>();
@@ -51,6 +53,7 @@ fn dead_node_discovered() {
         for m in &ms {
             let mut member_addresses = m
                 .get_members()
+                .unwrap()
                 .iter()
                 .map(|member| member.ip().to_string())
                 .collect::<Vec<_>>();
@@ -59,6 +62,6 @@ fn dead_node_discovered() {
             assert_eq!(expected_addresses, member_addresses);
         }
 
-        ms.iter_mut().for_each(membership::Membership::stop);
+        ms.iter_mut().for_each(|m| m.stop().unwrap());
     });
 }

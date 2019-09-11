@@ -1,3 +1,4 @@
+use failure::Error;
 use membership::{Membership, ProtocolConfig};
 use std::net::SocketAddr;
 use structopt::StructOpt;
@@ -16,12 +17,12 @@ struct Config {
     proto_config: ProtocolConfig,
 }
 
-fn main() {
+fn main() -> Result<(), failure::Error> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Config::from_args();
     //    let proto_config = ProtocolConfig::from_args();
     //    Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
     let mut membership = Membership::new(config.bind_address, config.proto_config);
-    membership.join(config.join_address);
-    membership.wait();
+    membership.join(config.join_address)?;
+    membership.wait()
 }

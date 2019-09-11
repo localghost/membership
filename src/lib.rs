@@ -1,4 +1,4 @@
-use failure::{Fail, ResultExt};
+use failure::{format_err, Error, Fail, ResultExt};
 use mio::net::*;
 use mio::*;
 use mio_extras::channel::{Receiver, Sender};
@@ -16,6 +16,8 @@ use crate::unique_circular_buffer::UniqueCircularBuffer;
 use log::{debug, info, warn};
 use std::sync::mpsc::SendError;
 use std::sync::{Arc, Mutex, RwLock};
+
+type Result<T> = std::result::Result<T, Error>;
 
 //#[deny(missing_docs)]
 #[derive(StructOpt)]
@@ -144,13 +146,13 @@ impl Gossip {
         (gossip, sender)
     }
 
-    fn join(&mut self, member: SocketAddr) {
+    fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.myself, "Can't join yourself");
 
         self.update_members(std::iter::once(member), std::iter::empty());
         let poll = Poll::new().unwrap();
-        poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty());
-        self.bind(&poll);
+        poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
+        self.bind(&poll)?;
 
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
@@ -178,12 +180,13 @@ impl Gossip {
                                     break 'mainloop;
                                 }
                                 ChannelMessage::GetMembers(sender) => {
-                                    sender.send(
-                                        std::iter::once(&self.myself)
-                                            .chain(self.members.iter())
-                                            .cloned()
-                                            .collect::<Vec<_>>(),
-                                    );
+                                    let members = std::iter::once(&self.myself)
+                                        .chain(self.members.iter())
+                                        .cloned()
+                                        .collect::<Vec<_>>();
+                                    if let Err(e) = sender.send(members) {
+                                        warn!("Failed to send list of members: {:?}", e);
+                                    }
                                 }
                             }
                         }
@@ -210,6 +213,8 @@ impl Gossip {
                 last_epoch_time = now;
             }
         }
+
+        Ok(())
     }
 
     fn advance_epoch(&mut self) {
@@ -238,8 +243,8 @@ impl Gossip {
         }
     }
 
-    fn bind(&mut self, poll: &Poll) {
-        self.server = Some(UdpSocket::bind(&self.myself).unwrap());
+    fn bind(&mut self, poll: &Poll) -> Result<()> {
+        self.server = Some(UdpSocket::bind(&self.myself).context("Failed to bind to socket")?);
         // FIXME: change to `PollOpt::edge()`
         poll.register(
             self.server.as_ref().unwrap(),
@@ -247,7 +252,7 @@ impl Gossip {
             Ready::readable() | Ready::writable(),
             PollOpt::level(),
         )
-        .unwrap();
+        .map_err(|e| format_err!("Failed to register socket for polling: {:?}", e))
     }
 
     fn send_letter(&self, letter: OutgoingLetter) {
@@ -525,7 +530,7 @@ pub struct Membership {
     bind_address: SocketAddr,
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    handle: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
 impl Membership {
@@ -538,25 +543,32 @@ impl Membership {
         }
     }
 
-    pub fn join(&mut self, member: SocketAddr) {
+    pub fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.bind_address, "Can't join yourself");
         assert!(self.handle.is_none(), "You have already joined");
 
         let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
-        self.handle = Some(std::thread::spawn(move || {
-            gossip.join(member);
-        }));
+        self.handle = Some(
+            std::thread::Builder::new()
+                .name("membership".to_string())
+                .spawn(move || gossip.join(member))?,
+        );
+        Ok(())
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
 
-        self.sender.as_ref().unwrap().send(ChannelMessage::Stop);
-        self.wait();
+        self.sender
+            .as_ref()
+            .unwrap()
+            .send(ChannelMessage::Stop)
+            .map_err(|e| format_err!("Failed to stop message: {:?}", e))?;
+        self.wait()
     }
 
-    pub fn get_members(&self) -> Result<Vec<SocketAddr>, failure::Error> {
+    pub fn get_members(&self) -> Result<Vec<SocketAddr>> {
         assert!(self.handle.is_some(), "First you have to join");
 
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -564,18 +576,18 @@ impl Membership {
             .as_ref()
             .unwrap()
             .send(ChannelMessage::GetMembers(sender))
-            .map_err(|e| failure::format_err!("Failed to ask for members: {:?}", e))?;
+            .map_err(|e| format_err!("Failed to ask for members: {:?}", e))?;
         receiver
             .recv()
-            .map_err(|e| failure::format_err!("Failed to get members: {:?}", e))
+            .map_err(|e| format_err!("Failed to get members: {:?}", e))
     }
 
-    pub fn wait(&mut self) -> Result<(), failure::Error> {
+    pub fn wait(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
         self.handle
             .take()
             .unwrap()
             .join()
-            .map_err(|e| failure::format_err!("Membership thread panicked: {:?}", e))
+            .map_err(|e| format_err!("Membership thread panicked: {:?}", e))?
     }
 }
