@@ -5,6 +5,8 @@ authors = ["Zbigniew Kostrzewa <kostrzewa@9livesdata.com>"]
 edition = "2018"
 description = "Implementation of Scalable Weakly-consistent Infection-style Process Group Membership Protocol with extensions"
 license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/localghost/membership"
 
 [dependencies]
 mio = "0.6.19"
