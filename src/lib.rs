@@ -1,11 +1,17 @@
-use failure::{format_err, Error, Fail, ResultExt};
+#![deny(missing_docs)]
+
+//! Implementation of SWIM protocol.
+//!
+//! Please refer to [SWIM paper](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf) for detailed description.
+
+use failure::{format_err, Error, ResultExt};
 use mio::net::*;
 use mio::*;
 use mio_extras::channel::{Receiver, Sender};
 use std::collections::vec_deque::VecDeque;
 use std::collections::HashSet;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::time::Duration;
 use structopt::StructOpt;
 mod message;
@@ -14,20 +20,22 @@ mod unique_circular_buffer;
 use crate::message::{Message, MessageType};
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use log::{debug, info, warn};
-use std::sync::mpsc::SendError;
-use std::sync::{Arc, Mutex, RwLock};
 
 type Result<T> = std::result::Result<T, Error>;
 
-//#[deny(missing_docs)]
 #[derive(StructOpt)]
+/// Configuration for the membership protocol.
 pub struct ProtocolConfig {
+    /// Number of seconds between checking new member.
     #[structopt(short = "o", long = "proto-period", default_value = "5")]
     pub protocol_period: u64,
 
+    /// Number of seconds to wait for response from a peer for.
+    /// Must be smaller than `protocol_period`.
     #[structopt(short = "a", long = "ack-timeout", default_value = "1")]
     pub ack_timeout: u8,
 
+    /// Maximum number of members selected for indirect probing
     #[structopt(long = "num-indirect", default_value = "3")]
     pub num_indirect: u8,
 }
@@ -526,6 +534,25 @@ impl Gossip {
     }
 }
 
+/// Runs the protocol on an internal thread.
+///
+/// # Example
+/// ```
+/// use membership::{Membership, ProtocolConfig};
+/// use std::net::SocketAddr;
+/// use failure::_core::str::FromStr;
+/// use failure::_core::time::Duration;
+///
+/// let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345")?, Default::default());
+/// let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456")?, Default::default());
+/// ms1.join(SocketAddr::from_str("127.0.0.1:3456")?)?;
+/// ms2.join(SocketAddr::from_str("127.0.0.1:2345")?)?;
+/// std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
+/// println!("{:?}", ms1.get_members()?);
+/// println!("{:?}", ms2.get_members()?);
+/// ms1.stop()?;
+/// ms2.stop()?;
+/// ```
 pub struct Membership {
     bind_address: SocketAddr,
     config: Option<ProtocolConfig>,
@@ -534,6 +561,7 @@ pub struct Membership {
 }
 
 impl Membership {
+    /// Create new Membership instance.
     pub fn new(bind_address: SocketAddr, config: ProtocolConfig) -> Self {
         Membership {
             bind_address,
@@ -543,6 +571,7 @@ impl Membership {
         }
     }
 
+    /// Joins
     pub fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.bind_address, "Can't join yourself");
         assert!(self.handle.is_none(), "You have already joined");
@@ -557,6 +586,7 @@ impl Membership {
         Ok(())
     }
 
+    /// Stop
     pub fn stop(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
 
@@ -568,6 +598,7 @@ impl Membership {
         self.wait()
     }
 
+    /// Get members.
     pub fn get_members(&self) -> Result<Vec<SocketAddr>> {
         assert!(self.handle.is_some(), "First you have to join");
 
@@ -582,6 +613,7 @@ impl Membership {
             .map_err(|e| format_err!("Failed to get members: {:?}", e))
     }
 
+    /// Wait.
     pub fn wait(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
         self.handle
