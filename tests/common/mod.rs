@@ -86,3 +86,14 @@ pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership>
     }
     ms
 }
+
+pub fn get_member_addresses(ms: &membership::Membership) -> Vec<String> {
+    let mut member_addresses = ms
+        .get_members()
+        .unwrap()
+        .iter()
+        .map(|member| member.ip().to_string())
+        .collect::<Vec<_>>();
+    member_addresses.sort();
+    member_addresses
+}
