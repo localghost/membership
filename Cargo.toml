@@ -1,7 +1,7 @@
 [package]
 name = "membership"
-version = "0.0.2"
-authors = ["Zbigniew Kostrzewa <kostrzewa@9livesdata.com>"]
+version = "0.0.3"
+authors = ["Zbigniew Kostrzewa <zkostrzewa@gmail.com>"]
 edition = "2018"
 description = "Implementation of Scalable Weakly-consistent Infection-style Process Group Membership Protocol with extensions"
 license = "Apache-2.0"
