@@ -3,6 +3,24 @@
 //! Implementation of SWIM protocol.
 //!
 //! Please refer to [SWIM paper](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf) for detailed description.
+//!
+//! # Examples
+//! ```
+//! use membership::{Membership, ProtocolConfig};
+//! use std::net::SocketAddr;
+//! use failure::_core::str::FromStr;
+//! use failure::_core::time::Duration;
+//!
+//! let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345")?, Default::default());
+//! let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456")?, Default::default());
+//! ms1.join(SocketAddr::from_str("127.0.0.1:3456")?)?;
+//! ms2.join(SocketAddr::from_str("127.0.0.1:2345")?)?;
+//! std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
+//! println!("{:?}", ms1.get_members()?);
+//! println!("{:?}", ms2.get_members()?);
+//! ms1.stop()?;
+//! ms2.stop()?;
+//! ```
 
 use failure::{format_err, Error, ResultExt};
 use mio::net::*;
@@ -30,12 +48,16 @@ pub struct ProtocolConfig {
     #[structopt(short = "o", long = "proto-period", default_value = "5")]
     pub protocol_period: u64,
 
-    /// Number of seconds to wait for response from a peer for.
-    /// Must be smaller than `protocol_period`.
+    /// Number of seconds to wait for response from a peer.
+    ///
+    /// Must be significantly (e.g. four times) smaller than `protocol_period`.
     #[structopt(short = "a", long = "ack-timeout", default_value = "1")]
     pub ack_timeout: u8,
 
-    /// Maximum number of members selected for indirect probing
+    /// Maximum number of members selected for indirect probing.
+    ///
+    /// When probed member does not respond in `ack_timeout`, `num_indirect` other members are asked to check
+    /// the probed member.
     #[structopt(long = "num-indirect", default_value = "3")]
     pub num_indirect: u8,
 }
@@ -199,7 +221,7 @@ impl Gossip {
                             }
                         }
                         Err(e) => {
-                            println!("Not ready yet");
+                            debug!("Not ready yet: {:?}", e);
                         }
                     },
                     _ => unreachable!(),
@@ -534,25 +556,7 @@ impl Gossip {
     }
 }
 
-/// Runs the protocol on an internal thread.
-///
-/// # Example
-/// ```
-/// use membership::{Membership, ProtocolConfig};
-/// use std::net::SocketAddr;
-/// use failure::_core::str::FromStr;
-/// use failure::_core::time::Duration;
-///
-/// let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345")?, Default::default());
-/// let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456")?, Default::default());
-/// ms1.join(SocketAddr::from_str("127.0.0.1:3456")?)?;
-/// ms2.join(SocketAddr::from_str("127.0.0.1:2345")?)?;
-/// std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
-/// println!("{:?}", ms1.get_members()?);
-/// println!("{:?}", ms2.get_members()?);
-/// ms1.stop()?;
-/// ms2.stop()?;
-/// ```
+/// Runs the gossip protocol on an internal thread.
 pub struct Membership {
     bind_address: SocketAddr,
     config: Option<ProtocolConfig>,
@@ -561,7 +565,7 @@ pub struct Membership {
 }
 
 impl Membership {
-    /// Create new Membership instance.
+    /// Creates new instance communicating with other members through `bind_address`.
     pub fn new(bind_address: SocketAddr, config: ProtocolConfig) -> Self {
         Membership {
             bind_address,
@@ -571,7 +575,9 @@ impl Membership {
         }
     }
 
-    /// Joins
+    /// Joins the group through `member` which has to already belong to the group.
+    ///
+    /// Member might not be instantly spotted by all other members of the group.
     pub fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.bind_address, "Can't join yourself");
         assert!(self.handle.is_none(), "You have already joined");
@@ -586,7 +592,10 @@ impl Membership {
         Ok(())
     }
 
-    /// Stop
+    /// Stops this member, removing it from the group.
+    ///
+    /// Member does not broadcast that its quiting (at least not yet), thus it may still be observed by others
+    /// as alive, at least for a short period of time.
     pub fn stop(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
 
@@ -598,7 +607,9 @@ impl Membership {
         self.wait()
     }
 
-    /// Get members.
+    /// Returns all alive members of the group this member knows about.
+    ///
+    /// These might not necessary be all alive members in the entire group.
     pub fn get_members(&self) -> Result<Vec<SocketAddr>> {
         assert!(self.handle.is_some(), "First you have to join");
 
@@ -613,7 +624,8 @@ impl Membership {
             .map_err(|e| format_err!("Failed to get members: {:?}", e))
     }
 
-    /// Wait.
+    #[doc(hidden)]
+    /// Waits for the member to finish.
     pub fn wait(&mut self) -> Result<()> {
         assert!(self.handle.is_some(), "You have not joined yet");
         self.handle

@@ -17,7 +17,7 @@ struct Config {
     proto_config: ProtocolConfig,
 }
 
-fn main() -> Result<(), failure::Error> {
+fn main() -> Result<(), Error> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Config::from_args();
     //    let proto_config = ProtocolConfig::from_args();
