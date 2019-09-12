@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
@@ -50,17 +51,17 @@ pub fn unshare_netns() {
         .success());
 }
 
-pub fn in_namespace<F>(code: F)
+pub fn in_namespace<F>(code: F) -> Result<(), failure::Error>
 where
-    F: FnOnce() -> () + Send + 'static,
+    F: FnOnce() -> Result<(), failure::Error> + Send + 'static,
 {
-    std::thread::spawn(|| {
+    std::thread::spawn(|| -> Result<(), failure::Error> {
         unshare_netns();
 
-        code();
+        code()
     })
     .join()
-    .unwrap();
+    .unwrap()
 }
 
 pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
@@ -80,7 +81,7 @@ pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership>
         let join_address = SocketAddr::from_str(&format!("{}:2345", addresses[(index + 1) % addresses.len()])).unwrap();
 
         let mut m = membership::Membership::new(bind_address, Default::default());
-        m.join(join_address);
+        m.join(join_address).unwrap();
 
         ms.push(m);
     }
@@ -96,4 +97,18 @@ pub fn get_member_addresses(ms: &membership::Membership) -> Vec<String> {
         .collect::<Vec<_>>();
     member_addresses.sort();
     member_addresses
+}
+
+pub fn assert_eq_unordered<T>(s1: &[T], s2: &[T])
+where
+    T: Eq + std::hash::Hash + std::fmt::Debug,
+{
+    assert_eq!(s1.iter().collect::<HashSet<_>>(), s2.iter().collect::<HashSet<_>>())
+}
+
+pub fn stop_memberships(mss: &mut [membership::Membership]) -> Result<(), failure::Error> {
+    for ms in mss {
+        ms.stop()?;
+    }
+    Ok(())
 }

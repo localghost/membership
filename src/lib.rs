@@ -11,15 +11,15 @@
 //! use failure::_core::str::FromStr;
 //! use failure::_core::time::Duration;
 //!
-//! let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345")?, Default::default());
-//! let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456")?, Default::default());
-//! ms1.join(SocketAddr::from_str("127.0.0.1:3456")?)?;
-//! ms2.join(SocketAddr::from_str("127.0.0.1:2345")?)?;
+//! let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345").unwrap(), Default::default());
+//! let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456").unwrap(), Default::default());
+//! ms1.join(SocketAddr::from_str("127.0.0.1:3456").unwrap()).unwrap();
+//! ms2.join(SocketAddr::from_str("127.0.0.1:2345").unwrap()).unwrap();
 //! std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
-//! println!("{:?}", ms1.get_members()?);
-//! println!("{:?}", ms2.get_members()?);
-//! ms1.stop()?;
-//! ms2.stop()?;
+//! println!("{:?}", ms1.get_members().unwrap());
+//! println!("{:?}", ms2.get_members().unwrap());
+//! ms1.stop().unwrap();
+//! ms2.stop().unwrap();
 //! ```
 
 use failure::{format_err, Error, ResultExt};

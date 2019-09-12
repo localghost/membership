@@ -1,4 +1,4 @@
-use failure::Error;
+use failure;
 use membership;
 use membership::{Membership, ProtocolConfig};
 use std::net::SocketAddr;
@@ -7,10 +7,12 @@ use std::time::Duration;
 
 mod common;
 
+type TestResult = std::result::Result<(), failure::Error>;
+
 #[test]
-fn all_members_alive() {
+fn all_members_alive() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    common::in_namespace(|| {
+    common::in_namespace(|| -> TestResult {
         let addresses = common::create_interfaces(3);
         let mut mss = common::start_memberships(&addresses);
 
@@ -19,14 +21,17 @@ fn all_members_alive() {
         for ms in &mss {
             assert_eq!(addresses, common::get_member_addresses(ms));
         }
-        mss.iter_mut().for_each(|m| m.stop().unwrap());
-    });
+
+        common::stop_memberships(&mut mss)?;
+
+        Ok(())
+    })
 }
 
 #[test]
-fn dead_node_discovered() {
+fn dead_node_discovered() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    common::in_namespace(|| {
+    common::in_namespace(|| -> TestResult {
         let addresses = common::create_interfaces(3);
         let mut mss = common::start_memberships(&addresses);
 
@@ -36,7 +41,7 @@ fn dead_node_discovered() {
             assert_eq!(addresses, common::get_member_addresses(ms));
         }
 
-        mss.pop().unwrap().stop();
+        common::stop_memberships(&mut [mss.pop().unwrap()])?;
 
         std::thread::sleep(Duration::from_secs(10));
 
@@ -45,20 +50,26 @@ fn dead_node_discovered() {
             assert_eq!(expected_addresses, common::get_member_addresses(ms));
         }
 
-        mss.iter_mut().for_each(|m| m.stop().unwrap());
-    });
+        common::stop_memberships(&mut mss)?;
+
+        Ok(())
+    })
 }
 
-// FIXME: Add proper checks.
 #[test]
-fn different_ports() -> Result<(), Error> {
-    let mut ms1 = Membership::new(SocketAddr::from_str("127.0.0.1:2345")?, Default::default());
-    let mut ms2 = Membership::new(SocketAddr::from_str("127.0.0.1:3456")?, Default::default());
-    ms1.join(SocketAddr::from_str("127.0.0.1:3456")?)?;
-    ms2.join(SocketAddr::from_str("127.0.0.1:2345")?)?;
-    std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
-    println!("{:?}", ms1.get_members()?);
-    println!("{:?}", ms2.get_members()?);
-    ms1.stop()?;
-    ms2.stop()
+fn different_ports() -> TestResult {
+    common::in_namespace(|| -> TestResult {
+        let address1 = SocketAddr::from_str("127.0.0.1:2345")?;
+        let address2 = SocketAddr::from_str("127.0.0.1:3456")?;
+        let mut ms1 = Membership::new(address1, Default::default());
+        let mut ms2 = Membership::new(address2, Default::default());
+
+        ms1.join(address2)?;
+        ms2.join(address1)?;
+        std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
+
+        common::assert_eq_unordered(&[address1, address2], &ms1.get_members()?);
+
+        common::stop_memberships(&mut [ms1, ms2])
+    })
 }
