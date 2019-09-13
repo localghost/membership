@@ -77,7 +77,7 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
     addresses
 }
 
-pub fn create_members(num_members: u8) -> (Vec<SocketAddr>, Vec<Membership>) {
+pub fn create_members(num_members: u8) -> Vec<Membership> {
     let addresses = create_interfaces(num_members)
         .iter()
         .map(|a| SocketAddr::from_str(&format!("{}:2345", a)).unwrap())
@@ -86,7 +86,7 @@ pub fn create_members(num_members: u8) -> (Vec<SocketAddr>, Vec<Membership>) {
         .iter()
         .map(|a| Membership::new(*a, Default::default()))
         .collect::<Vec<_>>();
-    (addresses, members)
+    members
 }
 
 pub fn join_neighbours(members: &mut [Membership]) -> Result<(), failure::Error> {
@@ -113,15 +113,8 @@ pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership>
     ms
 }
 
-pub fn get_member_addresses(ms: &membership::Membership) -> Vec<String> {
-    let mut member_addresses = ms
-        .get_members()
-        .unwrap()
-        .iter()
-        .map(|member| member.ip().to_string())
-        .collect::<Vec<_>>();
-    member_addresses.sort();
-    member_addresses
+pub fn get_members_addresses(members: &[Membership]) -> Vec<SocketAddr> {
+    members.iter().map(|m| m.bind_address()).collect::<Vec<_>>()
 }
 
 pub fn assert_eq_unordered<T>(s1: &[T], s2: &[T])

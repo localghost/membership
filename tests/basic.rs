@@ -6,23 +6,24 @@ use std::str::FromStr;
 use std::time::Duration;
 
 mod common;
+use crate::common::*;
 
 type TestResult = std::result::Result<(), failure::Error>;
 
 #[test]
 fn all_members_alive() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    common::in_namespace(|| -> TestResult {
-        let (addresses, mut members) = common::create_members(3);
-        common::join_neighbours(&mut members)?;
+    in_namespace(|| -> TestResult {
+        let mut members = create_members(3);
+        join_neighbours(&mut members)?;
 
-        std::thread::sleep(Duration::from_secs(10));
+        advance_epochs(2);
 
         for member in &members {
-            common::assert_eq_unordered(&addresses, &member.get_members()?);
+            assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
         }
 
-        common::stop_members(&mut members)?;
+        stop_members(&mut members)?;
 
         Ok(())
     })
@@ -31,27 +32,27 @@ fn all_members_alive() -> TestResult {
 #[test]
 fn dead_node_discovered() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    common::in_namespace(|| -> TestResult {
-        let (mut addresses, mut members) = common::create_members(3);
-        common::join_neighbours(&mut members)?;
+    in_namespace(|| -> TestResult {
+        let mut members = create_members(3);
+        join_neighbours(&mut members)?;
 
-        common::advance_epochs(2);
+        advance_epochs(2);
 
         for member in &members {
-            common::assert_eq_unordered(&addresses, &member.get_members()?);
+            assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
         }
 
         // remove one member
-        let (_, member) = (addresses.pop().unwrap(), members.pop().unwrap());
-        common::stop_members(&mut [member])?;
+        let member = members.pop().unwrap();
+        stop_members(&mut [member])?;
 
-        common::advance_epochs(2);
+        advance_epochs(2);
 
         for member in &members {
-            common::assert_eq_unordered(&addresses, &member.get_members()?);
+            assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
         }
 
-        common::stop_members(&mut members)?;
+        stop_members(&mut members)?;
 
         Ok(())
     })
@@ -59,7 +60,7 @@ fn dead_node_discovered() -> TestResult {
 
 #[test]
 fn different_ports() -> TestResult {
-    common::in_namespace(|| -> TestResult {
+    in_namespace(|| -> TestResult {
         let address1 = SocketAddr::from_str("127.0.0.1:2345")?;
         let address2 = SocketAddr::from_str("127.0.0.1:3456")?;
         let mut ms1 = Membership::new(address1, Default::default());
@@ -67,10 +68,10 @@ fn different_ports() -> TestResult {
 
         ms1.join(address2)?;
         ms2.join(address1)?;
-        std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
+        advance_epochs(2);
 
-        common::assert_eq_unordered(&[address1, address2], &ms1.get_members()?);
+        assert_eq_unordered(&[address1, address2], &ms1.get_members()?);
 
-        common::stop_members(&mut [ms1, ms2])
+        stop_members(&mut [ms1, ms2])
     })
 }
