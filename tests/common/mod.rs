@@ -1,6 +1,9 @@
+use crate::TestResult;
+use membership::{Membership, ProtocolConfig};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 pub fn create_tun_interface(cidr: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
@@ -74,6 +77,28 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
     addresses
 }
 
+pub fn create_members(num_members: u8) -> (Vec<SocketAddr>, Vec<Membership>) {
+    let addresses = create_interfaces(num_members)
+        .iter()
+        .map(|a| SocketAddr::from_str(&format!("{}:2345", a)).unwrap())
+        .collect::<Vec<_>>();
+    let members = addresses
+        .iter()
+        .map(|a| Membership::new(*a, Default::default()))
+        .collect::<Vec<_>>();
+    (addresses, members)
+}
+
+pub fn join_neighbours(members: &mut [Membership]) -> Result<(), failure::Error> {
+    let join_addresses = members
+        .iter()
+        .skip(1)
+        .chain(members.iter().take(1))
+        .map(|m| m.bind_address())
+        .collect::<Vec<_>>();
+    members.iter_mut().zip(join_addresses).try_for_each(|(m, a)| m.join(a))
+}
+
 pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership> {
     let mut ms: Vec<membership::Membership> = Vec::new();
     for (index, address) in addresses.iter().enumerate() {
@@ -106,9 +131,15 @@ where
     assert_eq!(s1.iter().collect::<HashSet<_>>(), s2.iter().collect::<HashSet<_>>())
 }
 
-pub fn stop_memberships(mss: &mut [membership::Membership]) -> Result<(), failure::Error> {
+pub fn stop_members(mss: &mut [membership::Membership]) -> Result<(), failure::Error> {
     for ms in mss {
         ms.stop()?;
     }
     Ok(())
+}
+
+pub fn advance_epochs(num_epochs: u8) {
+    std::thread::sleep(Duration::from_secs(
+        ProtocolConfig::default().protocol_period * num_epochs as u64,
+    ));
 }

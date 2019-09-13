@@ -13,16 +13,16 @@ type TestResult = std::result::Result<(), failure::Error>;
 fn all_members_alive() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     common::in_namespace(|| -> TestResult {
-        let addresses = common::create_interfaces(3);
-        let mut mss = common::start_memberships(&addresses);
+        let (addresses, mut members) = common::create_members(3);
+        common::join_neighbours(&mut members)?;
 
         std::thread::sleep(Duration::from_secs(10));
 
-        for ms in &mss {
-            assert_eq!(addresses, common::get_member_addresses(ms));
+        for member in &members {
+            common::assert_eq_unordered(&addresses, &member.get_members()?);
         }
 
-        common::stop_memberships(&mut mss)?;
+        common::stop_members(&mut members)?;
 
         Ok(())
     })
@@ -32,25 +32,26 @@ fn all_members_alive() -> TestResult {
 fn dead_node_discovered() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     common::in_namespace(|| -> TestResult {
-        let addresses = common::create_interfaces(3);
-        let mut mss = common::start_memberships(&addresses);
+        let (mut addresses, mut members) = common::create_members(3);
+        common::join_neighbours(&mut members)?;
 
-        std::thread::sleep(Duration::from_secs(10));
+        common::advance_epochs(2);
 
-        for ms in &mss {
-            assert_eq!(addresses, common::get_member_addresses(ms));
+        for member in &members {
+            common::assert_eq_unordered(&addresses, &member.get_members()?);
         }
 
-        common::stop_memberships(&mut [mss.pop().unwrap()])?;
+        // remove one member
+        let (_, member) = (addresses.pop().unwrap(), members.pop().unwrap());
+        common::stop_members(&mut [member])?;
 
-        std::thread::sleep(Duration::from_secs(10));
+        common::advance_epochs(2);
 
-        let expected_addresses = addresses.iter().rev().skip(1).rev().cloned().collect::<Vec<_>>();
-        for ms in &mss {
-            assert_eq!(expected_addresses, common::get_member_addresses(ms));
+        for member in &members {
+            common::assert_eq_unordered(&addresses, &member.get_members()?);
         }
 
-        common::stop_memberships(&mut mss)?;
+        common::stop_members(&mut members)?;
 
         Ok(())
     })
@@ -70,6 +71,6 @@ fn different_ports() -> TestResult {
 
         common::assert_eq_unordered(&[address1, address2], &ms1.get_members()?);
 
-        common::stop_memberships(&mut [ms1, ms2])
+        common::stop_members(&mut [ms1, ms2])
     })
 }

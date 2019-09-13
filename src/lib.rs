@@ -575,6 +575,11 @@ impl Membership {
         }
     }
 
+    /// Returns bind address of this member.
+    pub fn bind_address(&self) -> SocketAddr {
+        self.bind_address
+    }
+
     /// Joins the group through `member` which has to already belong to the group.
     ///
     /// Member might not be instantly spotted by all other members of the group.
