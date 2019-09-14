@@ -142,10 +142,15 @@ enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
+struct Member {
+    address: SocketAddr,
+    counter: u64, // dissemination counter
+}
+
 struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    members: Vec<SocketAddr>,
+    members: Vec<Member>,
     dead_members: UniqueCircularBuffer<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
@@ -215,9 +220,8 @@ impl Gossip {
                                     break 'mainloop;
                                 }
                                 ChannelMessage::GetMembers(sender) => {
-                                    let members = std::iter::once(&self.myself)
-                                        .chain(self.members.iter())
-                                        .cloned()
+                                    let members = std::iter::once(self.myself)
+                                        .chain(self.members.iter().map(|m| m.address))
                                         .collect::<Vec<_>>();
                                     if let Err(e) = sender.send(members) {
                                         warn!("Failed to send list of members: {:?}", e);
@@ -332,7 +336,10 @@ impl Gossip {
             }
             if self.members_presence.insert(member) {
                 info!("Member joined: {:?}", member);
-                self.members.push(member);
+                self.members.push(Member {
+                    address: member,
+                    counter: 0,
+                });
             }
             if self.dead_members.remove(&member) > 0 {
                 info!("Member {} found on the dead list", member);
@@ -361,7 +368,7 @@ impl Gossip {
 
     fn remove_member(&mut self, member: &SocketAddr) {
         if self.members_presence.remove(&member) {
-            let idx = self.members.iter().position(|e| e == member).unwrap();
+            let idx = self.members.iter().position(|e| e.address == *member).unwrap();
             self.members.remove(idx);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
@@ -381,7 +388,7 @@ impl Gossip {
         if self.next_member_index == 0 {
             self.members.shuffle(&mut self.rng);
         }
-        let target = self.members[self.next_member_index];
+        let target = self.members[self.next_member_index].address;
         self.next_member_index = (self.next_member_index + 1) % self.members.len();
         Some(target)
     }
@@ -414,8 +421,8 @@ impl Gossip {
                             &self
                                 .members
                                 .iter()
-                                .filter(|&member| *member != header.target)
-                                .cloned()
+                                .map(|m| m.address)
+                                .filter(|address| *address != header.target)
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
@@ -432,15 +439,19 @@ impl Gossip {
                                 Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                             // filter is needed to not include target node on the alive list as it is being suspected
                             message.with_members(
-                                &std::iter::once(&header.target)
-                                    .chain(self.members.iter().filter(|&m| *m != header.target))
-                                    .cloned()
+                                &std::iter::once(header.target)
+                                    .chain(
+                                        self.members
+                                            .iter()
+                                            .map(|m| m.address)
+                                            .filter(|address| *address != header.target),
+                                    )
                                     .collect::<Vec<_>>(),
                                 &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                             );
                             self.send_letter(OutgoingLetter {
                                 message,
-                                target: *member,
+                                target: member.address,
                             });
                         }
                         self.acks.push(Ack::new(request));
@@ -451,8 +462,8 @@ impl Gossip {
                             &self
                                 .members
                                 .iter()
-                                .filter(|&member| *member != header.target)
-                                .cloned()
+                                .map(|m| m.address)
+                                .filter(|address| *address != header.target)
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
@@ -464,7 +475,10 @@ impl Gossip {
                     }
                     Request::Ack(header) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                        message.with_members(
+                            &self.members.iter().map(|m| m.address).collect::<Vec<_>>(),
+                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
+                        );
                         self.send_letter(OutgoingLetter {
                             message,
                             target: header.target,
@@ -473,9 +487,8 @@ impl Gossip {
                     Request::AckIndirect(header, member) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
-                            &std::iter::once(&member)
-                                .chain(self.members.iter())
-                                .cloned()
+                            &std::iter::once(member)
+                                .chain(self.members.iter().map(|m| m.address))
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
