@@ -7,19 +7,31 @@ pub struct UniqueCircularBuffer<T> {
 impl<T> UniqueCircularBuffer<T> {
     pub fn new(size: usize) -> Self {
         UniqueCircularBuffer {
-            buffer: Vec::<T>::with_capacity(size+1),
+            buffer: Vec::<T>::with_capacity(size + 1),
             size,
         }
     }
 
-    pub fn push(&mut self, el: T) where T: PartialEq {
+    pub fn push(&mut self, el: T)
+    where
+        T: PartialEq,
+    {
         self.remove(&el);
         self.buffer.insert(0, el);
         self.buffer.truncate(self.size);
     }
 
-    pub fn remove(&mut self, el: &T) -> usize where T: PartialEq {
-        let indices = self.buffer.iter().enumerate().filter(|&(_, e)| {*e == *el}).map(|(idx, _)|{idx}).collect::<Vec<_>>();
+    pub fn remove(&mut self, el: &T) -> usize
+    where
+        T: PartialEq,
+    {
+        let indices = self
+            .buffer
+            .iter()
+            .enumerate()
+            .filter(|&(_, e)| *e == *el)
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
         let mut round: usize = 0;
         for idx in &indices {
             self.buffer.remove(idx - round);
@@ -33,7 +45,7 @@ impl<T> UniqueCircularBuffer<T> {
         self.buffer.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.buffer.iter()
     }
 }
@@ -59,14 +71,14 @@ mod test {
         buffer.push(1);
         buffer.push(2);
         assert_eq!(buffer.len(), 3);
-        assert_eq!(as_vec(&buffer), [2,1,42]);
+        assert_eq!(as_vec(&buffer), [2, 1, 42]);
 
         buffer.push(3);
         assert_eq!(buffer.len(), 3);
-        assert_eq!(as_vec(&buffer), [3,2,1]);
+        assert_eq!(as_vec(&buffer), [3, 2, 1]);
 
         buffer.push(2);
-        assert_eq!(as_vec(&buffer), [2,3,1]);
+        assert_eq!(as_vec(&buffer), [2, 3, 1]);
     }
 
     #[test]
@@ -92,16 +104,19 @@ mod test {
         buffer.push(2);
         buffer.push(3);
         buffer.push(4);
-        assert_eq!(as_vec(&buffer), [4,3,2]);
+        assert_eq!(as_vec(&buffer), [4, 3, 2]);
 
         buffer.remove(&3);
-        assert_eq!(as_vec(&buffer), [4,2]);
+        assert_eq!(as_vec(&buffer), [4, 2]);
 
         buffer.push(5);
-        assert_eq!(as_vec(&buffer), [5,4,2]);
+        assert_eq!(as_vec(&buffer), [5, 4, 2]);
     }
 
-    fn as_vec<T>(buffer: &UniqueCircularBuffer<T>) -> Vec<T> where T: Clone {
+    fn as_vec<T>(buffer: &UniqueCircularBuffer<T>) -> Vec<T>
+    where
+        T: Clone,
+    {
         buffer.iter().cloned().collect()
     }
 }

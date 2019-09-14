@@ -38,6 +38,9 @@ mod unique_circular_buffer;
 use crate::message::{Message, MessageType};
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use log::{debug, info, warn};
+use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -153,6 +156,7 @@ struct Gossip {
     requests: VecDeque<Request>,
     receiver: Receiver<ChannelMessage>,
     acks: Vec<Ack>,
+    rng: SmallRng,
 }
 
 impl Gossip {
@@ -172,6 +176,7 @@ impl Gossip {
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
+            rng: SmallRng::from_entropy(),
         };
         (gossip, sender)
     }
@@ -369,7 +374,13 @@ impl Gossip {
         if self.members.is_empty() {
             return None;
         }
-
+        // Following SWIM paper, section 4.3, next member to probe is picked in round-robin fashion, with all
+        // the members randomly shuffled after all members have been probed.
+        // FIXME: one thing that is missing is that new members are always added at the end instead of at uniformly
+        // random position.
+        if self.next_member_index == 0 {
+            self.members.shuffle(&mut self.rng);
+        }
         let target = self.members[self.next_member_index];
         self.next_member_index = (self.next_member_index + 1) % self.members.len();
         Some(target)
