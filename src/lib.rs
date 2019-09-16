@@ -27,7 +27,7 @@ use mio::net::*;
 use mio::*;
 use mio_extras::channel::{Receiver, Sender};
 use std::collections::vec_deque::VecDeque;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -142,12 +142,18 @@ enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
+struct Member {
+    address: SocketAddr,
+    counter: u64, // dissemination counter
+}
+
 struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
     dead_members: UniqueCircularBuffer<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
+    members_details: HashMap<SocketAddr, Member>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -168,6 +174,7 @@ impl Gossip {
             members: vec![],
             dead_members: UniqueCircularBuffer::new(5),
             members_presence: HashSet::new(),
+            members_details: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
@@ -333,6 +340,13 @@ impl Gossip {
             if self.members_presence.insert(member) {
                 info!("Member joined: {:?}", member);
                 self.members.push(member);
+                self.members_details.insert(
+                    member,
+                    Member {
+                        address: member,
+                        counter: 0,
+                    },
+                );
             }
             if self.dead_members.remove(&member) > 0 {
                 info!("Member {} found on the dead list", member);
@@ -363,6 +377,7 @@ impl Gossip {
         if self.members_presence.remove(&member) {
             let idx = self.members.iter().position(|e| e == member).unwrap();
             self.members.remove(idx);
+            self.members_details.remove(&member);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
