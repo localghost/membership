@@ -297,15 +297,21 @@ impl Gossip {
         .map_err(|e| format_err!("Failed to register socket for polling: {:?}", e))
     }
 
-    fn send_letter(&self, letter: OutgoingLetter) {
+    fn send_letter(&mut self, letter: OutgoingLetter) {
         debug!("{:?}", letter);
-        if let Err(e) = self
+        let result = self
             .server
             .as_ref()
             .unwrap()
-            .send_to(&letter.message.into_inner(), &letter.target)
-        {
+            .send_to(&letter.message.buffer(), &letter.target);
+        if let Err(e) = result {
             warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e);
+        } else {
+            letter
+                .message
+                .get_alive_members()
+                .iter()
+                .for_each(|m| self.members_details.get_mut(m).unwrap().counter += 1);
         }
     }
 
@@ -390,7 +396,7 @@ impl Gossip {
             return None;
         }
         // Following SWIM paper, section 4.3, next member to probe is picked in round-robin fashion, with all
-        // the members randomly shuffled after all members have been probed.
+        // the members randomly shuffled after each one has been probed.
         // FIXME: one thing that is missing is that new members are always added at the end instead of at uniformly
         // random position.
         if self.next_member_index == 0 {
@@ -427,7 +433,7 @@ impl Gossip {
                         // as that may lead to late failure discovery
                         message.with_members(
                             &self
-                                .members
+                                .get_least_disseminated_members()
                                 .iter()
                                 .filter(|&member| *member != header.target)
                                 .cloned()
@@ -441,21 +447,32 @@ impl Gossip {
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingIndirect(ref header) => {
-                        // FIXME do not send the message to the member that is being suspected
-                        for member in self.members.iter().take(self.config.num_indirect as usize) {
+                        let indirect_members = self
+                            .get_least_disseminated_members()
+                            .iter()
+                            // do not send the message to the member that is being suspected
+                            .filter(|&m| *m != header.target)
+                            .take(self.config.num_indirect as usize)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        for member in indirect_members {
                             let mut message =
                                 Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
                             // filter is needed to not include target node on the alive list as it is being suspected
                             message.with_members(
                                 &std::iter::once(&header.target)
-                                    .chain(self.members.iter().filter(|&m| *m != header.target))
+                                    .chain(
+                                        self.get_least_disseminated_members()
+                                            .iter()
+                                            .filter(|&m| *m != header.target),
+                                    )
                                     .cloned()
                                     .collect::<Vec<_>>(),
                                 &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                             );
                             self.send_letter(OutgoingLetter {
                                 message,
-                                target: *member,
+                                target: member,
                             });
                         }
                         self.acks.push(Ack::new(request));
@@ -464,7 +481,7 @@ impl Gossip {
                         let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
                         message.with_members(
                             &self
-                                .members
+                                .get_least_disseminated_members()
                                 .iter()
                                 .filter(|&member| *member != header.target)
                                 .cloned()
@@ -479,7 +496,10 @@ impl Gossip {
                     }
                     Request::Ack(header) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
-                        message.with_members(&self.members, &self.dead_members.iter().cloned().collect::<Vec<_>>());
+                        message.with_members(
+                            &self.get_least_disseminated_members(),
+                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
+                        );
                         self.send_letter(OutgoingLetter {
                             message,
                             target: header.target,
@@ -489,7 +509,7 @@ impl Gossip {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
                             &std::iter::once(&member)
-                                .chain(self.members.iter())
+                                .chain(self.get_least_disseminated_members().iter())
                                 .cloned()
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
@@ -579,6 +599,12 @@ impl Gossip {
             },
             letter.sender,
         ));
+    }
+
+    fn get_least_disseminated_members(&self) -> Vec<SocketAddr> {
+        let mut members = self.members_details.values().collect::<Vec<_>>();
+        members.sort_by(|a, b| a.counter.cmp(&b.counter));
+        members.iter().map(|m| m.address).collect::<Vec<_>>()
     }
 }
 

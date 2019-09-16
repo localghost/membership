@@ -139,6 +139,10 @@ impl Message {
         self.buffer
     }
 
+    pub(super) fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
     fn get_cursor_into_buffer(&self, position: u64) -> Option<Cursor<&BytesMut>> {
         if position >= self.buffer.len() as u64 {
             return None;
