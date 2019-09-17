@@ -75,21 +75,6 @@ impl Default for ProtocolConfig {
     }
 }
 
-struct OutgoingLetter {
-    target: SocketAddr,
-    message: message::Message,
-}
-
-impl fmt::Debug for OutgoingLetter {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "OutgoingLetter {{ target: {}, message: {:?} }}",
-            self.target, self.message
-        )
-    }
-}
-
 struct IncomingLetter {
     sender: SocketAddr,
     message: message::Message,
@@ -251,6 +236,7 @@ impl Gossip {
             }
 
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
+                self.show_metrics();
                 self.advance_epoch();
                 last_epoch_time = now;
             }
@@ -297,22 +283,20 @@ impl Gossip {
         .map_err(|e| format_err!("Failed to register socket for polling: {:?}", e))
     }
 
-    fn send_letter(&mut self, letter: OutgoingLetter) {
-        debug!("{:?}", letter);
-        let result = self
-            .server
-            .as_ref()
-            .unwrap()
-            .send_to(&letter.message.buffer(), &letter.target);
+    fn send_message(&mut self, target: &SocketAddr, message: &Message) {
+        debug!("{:?} <- {:?}", target, message);
+        let result = self.server.as_ref().unwrap().send_to(&message.buffer(), target);
         if let Err(e) = result {
-            warn!("Letter to {:?} was not delivered due to {:?}", letter.target, e);
+            warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
-            letter
-                .message
-                .get_alive_members()
-                .iter()
-                .for_each(|m| self.members_details.get_mut(m).unwrap().counter += 1);
+            self.update_member_counters(&message.get_alive_members());
         }
+    }
+
+    fn update_member_counters(&mut self, members: &[SocketAddr]) {
+        members
+            .iter()
+            .for_each(|m| self.members_details.get_mut(m).unwrap().counter += 1);
     }
 
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
@@ -440,10 +424,7 @@ impl Gossip {
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
-                        self.send_letter(OutgoingLetter {
-                            message,
-                            target: header.target,
-                        });
+                        self.send_message(&header.target, &message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingIndirect(ref header) => {
@@ -470,10 +451,7 @@ impl Gossip {
                                     .collect::<Vec<_>>(),
                                 &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                             );
-                            self.send_letter(OutgoingLetter {
-                                message,
-                                target: member,
-                            });
+                            self.send_message(&member, &message);
                         }
                         self.acks.push(Ack::new(request));
                     }
@@ -488,10 +466,7 @@ impl Gossip {
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
-                        self.send_letter(OutgoingLetter {
-                            message,
-                            target: header.target,
-                        });
+                        self.send_message(&header.target, &message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {
@@ -500,10 +475,7 @@ impl Gossip {
                             &self.get_least_disseminated_members(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
-                        self.send_letter(OutgoingLetter {
-                            message,
-                            target: header.target,
-                        });
+                        self.send_message(&header.target, &message);
                     }
                     Request::AckIndirect(header, member) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
@@ -514,10 +486,7 @@ impl Gossip {
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
-                        self.send_letter(OutgoingLetter {
-                            message,
-                            target: header.target,
-                        });
+                        self.send_message(&header.target, &message);
                     }
                 }
             }
@@ -605,6 +574,12 @@ impl Gossip {
         let mut members = self.members_details.values().collect::<Vec<_>>();
         members.sort_by(|a, b| a.counter.cmp(&b.counter));
         members.iter().map(|m| m.address).collect::<Vec<_>>()
+    }
+
+    fn show_metrics(&self) {
+        for member in self.members_details.values() {
+            debug!("{:?} -> {:?}: {}", self.myself, member.address, member.counter);
+        }
     }
 }
 

@@ -1,4 +1,3 @@
-use crate::TestResult;
 use membership::{Membership, ProtocolConfig};
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -99,19 +98,19 @@ pub fn join_neighbours(members: &mut [Membership]) -> Result<(), failure::Error>
     members.iter_mut().zip(join_addresses).try_for_each(|(m, a)| m.join(a))
 }
 
-pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership> {
-    let mut ms: Vec<membership::Membership> = Vec::new();
-    for (index, address) in addresses.iter().enumerate() {
-        let bind_address = SocketAddr::from_str(&format!("{}:2345", address)).unwrap();
-        let join_address = SocketAddr::from_str(&format!("{}:2345", addresses[(index + 1) % addresses.len()])).unwrap();
-
-        let mut m = membership::Membership::new(bind_address, Default::default());
-        m.join(join_address).unwrap();
-
-        ms.push(m);
-    }
-    ms
-}
+//pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership> {
+//    let mut ms: Vec<membership::Membership> = Vec::new();
+//    for (index, address) in addresses.iter().enumerate() {
+//        let bind_address = SocketAddr::from_str(&format!("{}:2345", address)).unwrap();
+//        let join_address = SocketAddr::from_str(&format!("{}:2345", addresses[(index + 1) % addresses.len()])).unwrap();
+//
+//        let mut m = membership::Membership::new(bind_address, Default::default());
+//        m.join(join_address).unwrap();
+//
+//        ms.push(m);
+//    }
+//    ms
+//}
 
 pub fn get_members_addresses(members: &[Membership]) -> Vec<SocketAddr> {
     members.iter().map(|m| m.bind_address()).collect::<Vec<_>>()

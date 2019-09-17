@@ -135,6 +135,7 @@ impl Message {
         result as u64
     }
 
+    #[allow(dead_code)]
     pub(super) fn into_inner(self) -> BytesMut {
         self.buffer
     }

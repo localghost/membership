@@ -1,9 +1,8 @@
 use failure;
 use membership;
-use membership::{Membership, ProtocolConfig};
+use membership::Membership;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::time::Duration;
 
 mod common;
 use crate::common::*;
