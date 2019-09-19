@@ -1,6 +1,6 @@
 [package]
 name = "membership"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["Zbigniew Kostrzewa <zkostrzewa@gmail.com>"]
 edition = "2018"
 description = "Implementation of Scalable Weakly-consistent Infection-style Process Group Membership Protocol with extensions"
