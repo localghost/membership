@@ -132,12 +132,24 @@ struct Member {
     counter: u64, // dissemination counter
 }
 
+impl Member {
+    fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    fn increment(&mut self) {
+        self.counter += 1;
+    }
+}
+
 struct DisseminatedMembers {
-    members: HashMap<SocketAddr, u64>,
+    members: Vec<Member>,
 }
 
 impl DisseminatedMembers {
-    fn get_least_disseminated(&self) {}
+    fn get_least_disseminated(&self) -> &[&Member] {
+        &self.members.
+    }
 }
 
 struct Gossip {
