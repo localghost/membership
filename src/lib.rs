@@ -132,6 +132,14 @@ struct Member {
     counter: u64, // dissemination counter
 }
 
+struct DisseminatedMembers {
+    members: HashMap<SocketAddr, u64>,
+}
+
+impl DisseminatedMembers {
+    fn get_least_disseminated(&self) {}
+}
+
 struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
