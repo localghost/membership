@@ -135,6 +135,17 @@ impl Message {
         result as u64
     }
 
+    pub(crate) fn count_alive(&self) -> usize {
+        let alive_header_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64;
+        let cursor = self.get_cursor_into_buffer(alive_header_position);
+        if cursor.is_none() {
+            return 0;
+        }
+        let mut cursor = cursor.unwrap();
+        let header = cursor.get_u8();
+        std::mem::size_of_val(&header) * 8 - header.leading_zeros() as usize - 1
+    }
+
     #[allow(dead_code)]
     pub(super) fn into_inner(self) -> BytesMut {
         self.buffer
@@ -182,6 +193,21 @@ mod test {
         assert_eq!(message.get_epoch(), 2);
         assert_eq!(message.get_alive_members(), []);
         assert_eq!(message.get_dead_members(), []);
+        assert_eq!(message.count_alive(), 0);
+    }
+
+    #[test]
+    fn count_alive() {
+        let mut message = Message::create(MessageType::Ping, 1, 2);
+
+        message.with_members(
+            &[
+                SocketAddr::from_str("127.0.0.1:80").unwrap(),
+                SocketAddr::from_str("127.0.0.2:8080").unwrap(),
+            ],
+            &[SocketAddr::from_str("192.168.0.1:80").unwrap()],
+        );
+        assert_eq!(message.count_alive(), 2);
     }
 
     #[test]
