@@ -27,7 +27,7 @@ use mio::net::*;
 use mio::*;
 use mio_extras::channel::{Receiver, Sender};
 use std::collections::vec_deque::VecDeque;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -41,6 +41,9 @@ use log::{debug, info, warn};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
+
+mod least_disseminated_members;
+use crate::least_disseminated_members::DisseminatedMembers;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -127,38 +130,14 @@ enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
-struct Member {
-    address: SocketAddr,
-    counter: u64, // dissemination counter
-}
-
-impl Member {
-    fn address(&self) -> SocketAddr {
-        self.address
-    }
-
-    fn increment(&mut self) {
-        self.counter += 1;
-    }
-}
-
-struct DisseminatedMembers {
-    members: Vec<Member>,
-}
-
-impl DisseminatedMembers {
-    fn get_least_disseminated(&self) -> &[&Member] {
-        &self.members.
-    }
-}
-
 struct Gossip {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
+    alive_disseminated_members: DisseminatedMembers,
+    suspected_disseminated_members: DisseminatedMembers,
     dead_members: UniqueCircularBuffer<SocketAddr>,
     members_presence: HashSet<SocketAddr>,
-    members_details: HashMap<SocketAddr, Member>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -177,9 +156,10 @@ impl Gossip {
             config,
             server: None,
             members: vec![],
+            alive_disseminated_members: DisseminatedMembers::new(),
+            suspected_disseminated_members: DisseminatedMembers::new(),
             dead_members: UniqueCircularBuffer::new(5),
             members_presence: HashSet::new(),
-            members_details: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
@@ -256,7 +236,7 @@ impl Gossip {
             }
 
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
-                self.show_metrics();
+                //                self.show_metrics();
                 self.advance_epoch();
                 last_epoch_time = now;
             }
@@ -309,14 +289,8 @@ impl Gossip {
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
-            self.update_member_counters(&message.get_alive_members());
+            self.alive_disseminated_members.update_members(message.count_alive());
         }
-    }
-
-    fn update_member_counters(&mut self, members: &[SocketAddr]) {
-        members
-            .iter()
-            .for_each(|m| self.members_details.get_mut(m).unwrap().counter += 1);
     }
 
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
@@ -350,13 +324,7 @@ impl Gossip {
             if self.members_presence.insert(member) {
                 info!("Member joined: {:?}", member);
                 self.members.push(member);
-                self.members_details.insert(
-                    member,
-                    Member {
-                        address: member,
-                        counter: 0,
-                    },
-                );
+                self.alive_disseminated_members.add_member(member);
             }
             if self.dead_members.remove(&member) > 0 {
                 info!("Member {} found on the dead list", member);
@@ -387,7 +355,7 @@ impl Gossip {
         if self.members_presence.remove(&member) {
             let idx = self.members.iter().position(|e| e == member).unwrap();
             self.members.remove(idx);
-            self.members_details.remove(&member);
+            self.alive_disseminated_members.remove_member(*member);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
@@ -437,8 +405,8 @@ impl Gossip {
                         // as that may lead to late failure discovery
                         message.with_members(
                             &self
-                                .get_least_disseminated_members()
-                                .iter()
+                                .alive_disseminated_members
+                                .get_members()
                                 .filter(|&member| *member != header.target)
                                 .cloned()
                                 .collect::<Vec<_>>(),
@@ -449,8 +417,8 @@ impl Gossip {
                     }
                     Request::PingIndirect(ref header) => {
                         let indirect_members = self
-                            .get_least_disseminated_members()
-                            .iter()
+                            .alive_disseminated_members
+                            .get_members()
                             // do not send the message to the member that is being suspected
                             .filter(|&m| *m != header.target)
                             .take(self.config.num_indirect as usize)
@@ -463,8 +431,8 @@ impl Gossip {
                             message.with_members(
                                 &std::iter::once(&header.target)
                                     .chain(
-                                        self.get_least_disseminated_members()
-                                            .iter()
+                                        self.alive_disseminated_members
+                                            .get_members()
                                             .filter(|&m| *m != header.target),
                                     )
                                     .cloned()
@@ -479,8 +447,8 @@ impl Gossip {
                         let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
                         message.with_members(
                             &self
-                                .get_least_disseminated_members()
-                                .iter()
+                                .alive_disseminated_members
+                                .get_members()
                                 .filter(|&member| *member != header.target)
                                 .cloned()
                                 .collect::<Vec<_>>(),
@@ -492,7 +460,11 @@ impl Gossip {
                     Request::Ack(header) => {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
-                            &self.get_least_disseminated_members(),
+                            &self
+                                .alive_disseminated_members
+                                .get_members()
+                                .cloned()
+                                .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         );
                         self.send_message(&header.target, &message);
@@ -501,7 +473,7 @@ impl Gossip {
                         let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
                         message.with_members(
                             &std::iter::once(&member)
-                                .chain(self.get_least_disseminated_members().iter())
+                                .chain(self.alive_disseminated_members.get_members())
                                 .cloned()
                                 .collect::<Vec<_>>(),
                             &self.dead_members.iter().cloned().collect::<Vec<_>>(),
@@ -588,18 +560,6 @@ impl Gossip {
             },
             letter.sender,
         ));
-    }
-
-    fn get_least_disseminated_members(&self) -> Vec<SocketAddr> {
-        let mut members = self.members_details.values().collect::<Vec<_>>();
-        members.sort_by(|a, b| a.counter.cmp(&b.counter));
-        members.iter().map(|m| m.address).collect::<Vec<_>>()
-    }
-
-    fn show_metrics(&self) {
-        for member in self.members_details.values() {
-            debug!("{:?} -> {:?}: {}", self.myself, member.address, member.counter);
-        }
     }
 }
 
