@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use bytes::{Buf, BufMut, BytesMut};
 use std::fmt;
 use std::io::Cursor;

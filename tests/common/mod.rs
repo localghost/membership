@@ -1,4 +1,4 @@
-use membership::{Membership, ProtocolConfig};
+use membership::{Node, ProtocolConfig};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -76,19 +76,19 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
     addresses
 }
 
-pub fn create_members(num_members: u8) -> Vec<Membership> {
+pub fn create_members(num_members: u8) -> Vec<Node> {
     let addresses = create_interfaces(num_members)
         .iter()
         .map(|a| SocketAddr::from_str(&format!("{}:2345", a)).unwrap())
         .collect::<Vec<_>>();
     let members = addresses
         .iter()
-        .map(|a| Membership::new(*a, Default::default()))
+        .map(|a| Node::new(*a, Default::default()))
         .collect::<Vec<_>>();
     members
 }
 
-pub fn join_neighbours(members: &mut [Membership]) -> Result<(), failure::Error> {
+pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
     let join_addresses = members
         .iter()
         .skip(1)
@@ -112,7 +112,7 @@ pub fn join_neighbours(members: &mut [Membership]) -> Result<(), failure::Error>
 //    ms
 //}
 
-pub fn get_members_addresses(members: &[Membership]) -> Vec<SocketAddr> {
+pub fn get_members_addresses(members: &[Node]) -> Vec<SocketAddr> {
     members.iter().map(|m| m.bind_address()).collect::<Vec<_>>()
 }
 
@@ -123,7 +123,7 @@ where
     assert_eq!(s1.iter().collect::<HashSet<_>>(), s2.iter().collect::<HashSet<_>>())
 }
 
-pub fn stop_members(mss: &mut [membership::Membership]) -> Result<(), failure::Error> {
+pub fn stop_members(mss: &mut [membership::Node]) -> Result<(), failure::Error> {
     for ms in mss {
         ms.stop()?;
     }

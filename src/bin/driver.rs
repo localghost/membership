@@ -1,10 +1,10 @@
 use failure::Error;
-use membership::{Membership, ProtocolConfig};
+use membership::{Node, ProtocolConfig};
 use std::net::SocketAddr;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
-struct Config {
+struct Options {
     #[structopt(short = "j", long = "join-address", default_value = "127.0.0.1:2345")]
     join_address: SocketAddr,
 
@@ -14,15 +14,35 @@ struct Config {
     // FIXME: this should not be public, fix dependencies between the two configs, make clear which is about protocol
     // and which about client properties.
     #[structopt(flatten)]
-    proto_config: ProtocolConfig,
+    proto_config: ProtocolOptions,
+}
+
+#[derive(StructOpt)]
+struct ProtocolOptions {
+    #[structopt(short = "o", long = "proto-period", default_value = "5")]
+    pub protocol_period: u64,
+
+    #[structopt(short = "a", long = "ack-timeout", default_value = "1")]
+    pub ack_timeout: u8,
+
+    #[structopt(long = "num-indirect", default_value = "3")]
+    pub num_indirect: u8,
+}
+
+impl From<ProtocolOptions> for ProtocolConfig {
+    fn from(options: ProtocolOptions) -> Self {
+        ProtocolConfig {
+            protocol_period: options.protocol_period,
+            ack_timeout: options.ack_timeout,
+            num_indirect: options.num_indirect,
+        }
+    }
 }
 
 fn main() -> Result<(), Error> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
-    let config = Config::from_args();
-    //    let proto_config = ProtocolConfig::from_args();
-    //    Gossip::new(config.proto_config).join(IpAddr::from_str(&config.join_address).unwrap());
-    let mut membership = Membership::new(config.bind_address, config.proto_config);
+    let config = Options::from_args();
+    let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));
     membership.join(config.join_address)?;
     membership.wait()
 }
