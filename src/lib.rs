@@ -130,7 +130,7 @@ enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
-struct Gossip {
+struct SyncNode {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
     members: Vec<SocketAddr>,
@@ -149,10 +149,10 @@ struct Gossip {
     rng: SmallRng,
 }
 
-impl Gossip {
-    fn new(bind_address: SocketAddr, config: ProtocolConfig) -> (Gossip, Sender<ChannelMessage>) {
+impl SyncNode {
+    fn new(bind_address: SocketAddr, config: ProtocolConfig) -> (SyncNode, Sender<ChannelMessage>) {
         let (sender, receiver) = mio_extras::channel::channel();
-        let gossip = Gossip {
+        let gossip = SyncNode {
             config,
             server: None,
             members: vec![],
@@ -594,7 +594,7 @@ impl Membership {
         assert_ne!(member, self.bind_address, "Can't join yourself");
         assert!(self.handle.is_none(), "You have already joined");
 
-        let (mut gossip, sender) = Gossip::new(self.bind_address, self.config.take().unwrap());
+        let (mut gossip, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
         self.handle = Some(
             std::thread::Builder::new()
