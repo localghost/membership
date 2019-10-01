@@ -25,7 +25,8 @@
 pub use crate::node::Node;
 pub use crate::protocol_config::ProtocolConfig;
 
-/// Alias for backward compatibility
+/// Alias for backward compatibility. Please use [Node](struct.Node.html) instead.
+#[deprecated(since = "0.0.6", note = "Please use `Node` instead.")]
 pub type Membership = Node;
 
 mod least_disseminated_members;
