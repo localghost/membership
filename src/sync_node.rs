@@ -70,6 +70,7 @@ pub(crate) enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
+/// Runs the protocol on current thread, blocking it.
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
