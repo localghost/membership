@@ -36,7 +36,6 @@ impl fmt::Debug for IncomingLetter {
 #[derive(Debug)]
 struct Header {
     target: SocketAddr,
-    epoch: u64,
     sequence_number: u64,
 }
 
@@ -128,7 +127,6 @@ impl SyncNode {
         let initial_ping = Request::Ping(Header {
             // the member we were given to join should be on the alive members list
             target: self.get_next_member().unwrap(),
-            epoch: self.epoch,
             sequence_number: self.get_next_sequence_number(),
         });
         self.requests.push_front(initial_ping);
@@ -190,7 +188,6 @@ impl SyncNode {
         if let Some(member) = self.get_next_member() {
             let ping = Request::Ping(Header {
                 target: member,
-                epoch: self.epoch,
                 sequence_number: self.get_next_sequence_number(),
             });
             self.requests.push_front(ping);
@@ -341,7 +338,7 @@ impl SyncNode {
                 debug!("{:?}", request);
                 match request {
                     Request::Ping(ref header) => {
-                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
                         // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
                         // as that may lead to late failure discovery
                         message.with_members(
@@ -366,8 +363,7 @@ impl SyncNode {
                             .cloned()
                             .collect::<Vec<_>>();
                         for member in indirect_members {
-                            let mut message =
-                                Message::create(MessageType::PingIndirect, header.sequence_number, header.epoch);
+                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number);
                             // filter is needed to not include target node on the alive list as it is being suspected
                             message.with_members(
                                 &std::iter::once(&header.target)
@@ -385,7 +381,7 @@ impl SyncNode {
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingProxy(ref header, ..) => {
-                        let mut message = Message::create(MessageType::Ping, header.sequence_number, header.epoch);
+                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
                         message.with_members(
                             &self
                                 .alive_disseminated_members
@@ -399,7 +395,7 @@ impl SyncNode {
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {
-                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
                         message.with_members(
                             &self
                                 .alive_disseminated_members
@@ -411,7 +407,7 @@ impl SyncNode {
                         self.send_message(&header.target, &message);
                     }
                     Request::AckIndirect(header, member) => {
-                        let mut message = Message::create(MessageType::PingAck, header.sequence_number, header.epoch);
+                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
                         message.with_members(
                             &std::iter::once(&member)
                                 .chain(self.alive_disseminated_members.get_members())
@@ -464,7 +460,6 @@ impl SyncNode {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 target: *reply_to,
-                                epoch: letter.message.get_epoch(),
                                 sequence_number: letter.message.get_sequence_number(),
                             },
                             letter.sender,
@@ -487,7 +482,6 @@ impl SyncNode {
     fn handle_ping(&mut self, letter: &IncomingLetter) {
         self.requests.push_back(Request::Ack(Header {
             target: letter.sender,
-            epoch: letter.message.get_epoch(),
             sequence_number: letter.message.get_sequence_number(),
         }));
     }
@@ -497,7 +491,6 @@ impl SyncNode {
             Header {
                 target: letter.message.get_alive_members()[0],
                 sequence_number: letter.message.get_sequence_number(),
-                epoch: letter.message.get_epoch(),
             },
             letter.sender,
         ));
