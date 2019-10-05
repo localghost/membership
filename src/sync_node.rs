@@ -227,6 +227,7 @@ impl SyncNode {
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
+            // FIXME: the disseminated members should be updated only when Ack is received
             self.alive_disseminated_members.update_members(message.count_alive());
         }
     }
