@@ -11,6 +11,27 @@ pub(crate) struct Member {
     incarnation: Incarnation,
 }
 
+impl Member {
+    pub(crate) fn new(address: SocketAddr) -> Self {
+        Member {
+            address,
+            incarnation: 0,
+        }
+    }
+
+    pub(crate) fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    pub(crate) fn incarnation(&self) -> Incarnation {
+        self.incarnation
+    }
+
+    pub(crate) fn increment(&mut self) {
+        self.incarnation += 1;
+    }
+}
+
 impl PartialOrd for Member {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         if self.address != other.address {

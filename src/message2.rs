@@ -14,6 +14,19 @@ pub(super) enum MessageType {
     PingIndirect,
 }
 
+struct MessageBuilder {
+    version: u64,
+    max_length: u64,
+}
+
+impl MessageBuilder {
+    fn new(version: u64, max_length: u64) -> Self {
+        MessageBuilder { version, max_length }
+    }
+
+    fn messageType(messageType: MessageType) {}
+}
+
 pub(super) struct Message2 {
     buffer: BytesMut,
 }
@@ -28,7 +41,12 @@ impl Message2 {
         message
     }
 
-    pub(super) fn with_notifications<'a>(notifications: impl Iterator<Item = &'a Notification>) -> usize {}
+    pub(super) fn with_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) -> usize {
+        while self.buffer.len() < self.buffer.capacity() {
+            let notification = notifications.next();
+        }
+    }
+
     pub(super) fn with_members<'a>(members: impl Iterator<Item = &'a Member>) -> usize {}
 
     pub(super) fn from_bytes(bytes: &[u8], count: usize) -> Self {
