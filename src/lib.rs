@@ -34,6 +34,7 @@ mod least_disseminated_members;
 mod member;
 mod message;
 mod message2;
+mod message_decoder;
 mod message_encoder;
 mod node;
 mod notification;
