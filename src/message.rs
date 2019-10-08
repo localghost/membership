@@ -5,7 +5,7 @@ use std::fmt;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-#[derive(Debug, PartialEq, Copy)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub(super) enum MessageType {
     Ping,
     PingAck,
