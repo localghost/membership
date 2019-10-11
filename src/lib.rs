@@ -30,10 +30,10 @@ pub use crate::protocol_config::ProtocolConfig;
 pub type Membership = Node;
 
 mod disseminated;
+mod incoming_message;
 mod least_disseminated_members;
 mod member;
 mod message;
-mod message2;
 mod message_decoder;
 mod message_encoder;
 mod node;
