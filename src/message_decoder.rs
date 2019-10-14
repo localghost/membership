@@ -8,12 +8,12 @@ use failure::format_err;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-pub struct MessageDecoder<'a> {
+struct MessageDecoder<'a> {
     buffer: Cursor<&'a [u8]>,
 }
 
 impl<'a> MessageDecoder<'a> {
-    pub(crate) fn decode(buffer: &[u8]) -> Result<IncomingMessage> {
+    fn decode(buffer: &[u8]) -> Result<IncomingMessage> {
         MessageDecoder {
             buffer: Cursor::new(buffer),
         }
@@ -111,16 +111,40 @@ impl<'a> MessageDecoder<'a> {
         let count = self.buffer.get_u8();
         let mut result = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            // TODO read IP address type
-            result.push(self.decode_member()?);
+            // Member header:
+            // +----------------+
+            // [7][6|5|4|3|2|1|0]
+            // +----------------+
+            // 0-6: reserved
+            // 7: IP address type
+            let header = self.buffer.get_u8();
+            result.push(self.decode_member(header >> 7)?);
         }
         Ok(result)
     }
 }
 
-fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
+pub(crate) fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
     // 1. check protocol version in buffer
     // 2. create proper decoder
-    // 3. decode and return message
     MessageDecoder::decode(buffer)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use bytes::{BufMut, BytesMut};
+
+    #[test]
+    fn decode_empty_message() {
+        let mut buffer = BytesMut::new();
+        buffer.put_i32_be(MessageType::Ping as i32);
+        buffer.put_u64_be(42);
+
+        let message = decode_message(&buffer).unwrap();
+        assert_eq!(message.message_type, MessageType::Ping);
+        assert_eq!(message.sequence_number, 42);
+        assert!(message.notifications.is_empty());
+        assert!(message.broadcast.is_empty());
+    }
 }

@@ -7,12 +7,12 @@ struct MessageEncoder {
     buffer: BytesMut,
 }
 
-impl MessageEncoder {
-    fn message_type(message_type: MessageType) {}
-
-    fn sequence_number(sequence_number: u64) {}
-
-    fn notifications(notifications: &[Notification]) -> usize {}
-
-    fn broadcast(members: &[Member]) -> usize {}
-}
+//impl MessageEncoder {
+//    fn message_type(message_type: MessageType) {}
+//
+//    fn sequence_number(sequence_number: u64) {}
+//
+//    fn notifications(notifications: &[Notification]) -> usize {}
+//
+//    fn broadcast(members: &[Member]) -> usize {}
+//}

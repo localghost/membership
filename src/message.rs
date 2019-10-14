@@ -5,6 +5,7 @@ use std::fmt;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+// TODO: change repr to u8
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub(super) enum MessageType {
     Ping,
