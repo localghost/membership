@@ -3,6 +3,7 @@
 use crate::least_disseminated_members::DisseminatedMembers;
 use crate::message::{Message, MessageType};
 use crate::result::Result;
+use crate::suspicion::Suspicion;
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use crate::ProtocolConfig;
 use failure::{format_err, ResultExt};
@@ -87,6 +88,7 @@ pub(crate) struct SyncNode {
     receiver: Receiver<ChannelMessage>,
     acks: Vec<Ack>,
     rng: SmallRng,
+    suspicions: VecDeque<Suspicion>,
 }
 
 impl SyncNode {
@@ -109,6 +111,7 @@ impl SyncNode {
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
             rng: SmallRng::from_entropy(),
+            suspicions: VecDeque::new(),
         };
         (gossip, sender)
     }

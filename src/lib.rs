@@ -40,5 +40,6 @@ mod node;
 mod notification;
 mod protocol_config;
 mod result;
+mod suspicion;
 mod sync_node;
 mod unique_circular_buffer;
