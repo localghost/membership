@@ -1,7 +1,9 @@
 #![deny(missing_docs)]
 
+use crate::incoming_message::IncomingMessage;
 use crate::least_disseminated_members::DisseminatedMembers;
 use crate::message::{Message, MessageType};
+use crate::message_decoder::decode_message;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::unique_circular_buffer::UniqueCircularBuffer;
@@ -21,14 +23,14 @@ use std::time::Duration;
 
 struct IncomingLetter {
     sender: SocketAddr,
-    message: Message,
+    message: IncomingMessage,
 }
 
 impl fmt::Debug for IncomingLetter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "IncomingLetter {{ sender: {}, message: {:?} }}",
+            "IncomingLetter {{ sender: {:#?}, message: {:#?} }}",
             self.sender, self.message
         )
     }
@@ -82,7 +84,7 @@ pub(crate) struct SyncNode {
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
-    recv_buffer: [u8; 64],
+    recv_buffer: Vec<u8>,
     myself: SocketAddr,
     requests: VecDeque<Request>,
     receiver: Receiver<ChannelMessage>,
@@ -105,7 +107,7 @@ impl SyncNode {
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
-            recv_buffer: [0; 64],
+            recv_buffer: Vec::with_capacity(1500),
             myself: bind_address,
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
@@ -238,10 +240,14 @@ impl SyncNode {
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
         match self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
             Ok((count, sender)) => {
-                let letter = IncomingLetter {
-                    sender,
-                    message: Message::from_bytes(&self.recv_buffer, count),
+                let message = match decode_message(&self.recv_buffer[..count]) {
+                    Ok(message) => message,
+                    Err(e) => {
+                        warn!("Failed to decode from message {:#?}: {}", sender, e);
+                        return None;
+                    }
                 };
+                let letter = IncomingLetter { sender, message };
                 debug!("{:?}", letter);
                 Some(letter)
             }
@@ -331,7 +337,7 @@ impl SyncNode {
         if event.readiness().is_readable() {
             if let Some(letter) = self.recv_letter() {
                 self.update_members_from_letter(&letter);
-                match letter.message.get_type() {
+                match letter.message.message_type {
                     MessageType::Ping => self.handle_ping(&letter),
                     MessageType::PingAck => self.handle_ack(&letter),
                     MessageType::PingIndirect => self.handle_indirect_ping(&letter),
@@ -453,18 +459,17 @@ impl SyncNode {
             match ack.request {
                 Request::PingIndirect(ref header) => {
                     if letter.message.get_alive_members()[0] == header.target
-                        && letter.message.get_sequence_number() == header.sequence_number
+                        && letter.message.sequence_number == header.sequence_number
                     {
                         continue;
                     }
                 }
                 Request::PingProxy(ref header, ref reply_to) => {
-                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number
-                    {
+                    if letter.sender == header.target && letter.message.sequence_number == header.sequence_number {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 target: *reply_to,
-                                sequence_number: letter.message.get_sequence_number(),
+                                sequence_number: letter.message.sequence_number,
                             },
                             letter.sender,
                         ));
@@ -472,8 +477,7 @@ impl SyncNode {
                     }
                 }
                 Request::Ping(ref header) => {
-                    if letter.sender == header.target && letter.message.get_sequence_number() == header.sequence_number
-                    {
+                    if letter.sender == header.target && letter.message.sequence_number == header.sequence_number {
                         continue;
                     }
                 }
@@ -486,7 +490,7 @@ impl SyncNode {
     fn handle_ping(&mut self, letter: &IncomingLetter) {
         self.requests.push_back(Request::Ack(Header {
             target: letter.sender,
-            sequence_number: letter.message.get_sequence_number(),
+            sequence_number: letter.message.sequence_number,
         }));
     }
 
@@ -494,7 +498,7 @@ impl SyncNode {
         self.requests.push_back(Request::PingProxy(
             Header {
                 target: letter.message.get_alive_members()[0],
-                sequence_number: letter.message.get_sequence_number(),
+                sequence_number: letter.message.sequence_number,
             },
             letter.sender,
         ));

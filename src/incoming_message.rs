@@ -4,6 +4,7 @@ use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
 
+#[derive(Debug)]
 pub(crate) struct IncomingMessage {
     pub(crate) message_type: MessageType,
     pub(crate) sequence_number: u64,
