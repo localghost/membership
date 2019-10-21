@@ -2,7 +2,7 @@ use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
-use bytes::{BufMut, Bytes, BytesMut, IntoBuf};
+use bytes::{BufMut, Bytes, BytesMut};
 use failure::format_err;
 use std::net::SocketAddr;
 
@@ -13,18 +13,16 @@ struct OutgoingMessage {
 }
 
 impl OutgoingMessage {
-    fn new(max_size: usize) -> OutgoingMessageWithType {
-        OutgoingMessageWithType {
-            message: OutgoingMessage {
-                buffer: BytesMut::with_capacity(max_size),
-                num_notifications: 0,
-                num_broadcast: 0,
-            },
-        }
+    fn num_notifications(&self) -> usize {
+        self.num_notifications
+    }
+
+    fn num_broadcast(&self) -> usize {
+        self.num_broadcast
     }
 }
 
-fn encode_message(max_size: usize) -> OutgoingMessageWithType {
+pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
     OutgoingMessageWithType {
         encoder: MessageEncoder {
             message: OutgoingMessage {
@@ -117,6 +115,10 @@ impl MessageEncoder {
             }
             Notification::Confirm { member } => {
                 self.message.buffer.put_u8(2);
+                self.encode_member(member)?;
+            }
+            Notification::Check { member } => {
+                self.message.buffer.put_u8(3);
                 self.encode_member(member)?;
             }
         }

@@ -76,6 +76,7 @@ impl<'a> MessageDecoder<'a> {
             0 => Notification::Alive { member },
             1 => Notification::Suspect { member },
             2 => Notification::Confirm { member },
+            3 => Notification::Check { member },
             x => return Err(format_err!("Unsupported notification: {}", x)),
         };
         Ok(notification)

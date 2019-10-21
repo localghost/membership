@@ -5,6 +5,7 @@ pub(crate) enum Notification {
     Alive { member: Member },
     Suspect { member: Member },
     Confirm { member: Member },
+    Check { member: Member },
 }
 
 //impl Debug for Notification {
