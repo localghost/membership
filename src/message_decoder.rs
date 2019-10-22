@@ -1,4 +1,4 @@
-use crate::incoming_message::PingAckMessage;
+use crate::incoming_message::ProtocolMessage;
 use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
@@ -13,20 +13,32 @@ struct MessageDecoder<'a> {
 }
 
 impl<'a> MessageDecoder<'a> {
-    fn decode(buffer: &[u8]) -> Result<PingAckMessage> {
+    fn decode(buffer: &[u8]) -> Result<ProtocolMessage> {
         MessageDecoder {
             buffer: Cursor::new(buffer),
         }
         .decode_message()
     }
 
-    fn decode_message(&mut self) -> Result<PingAckMessage> {
-        Ok(PingAckMessage {
-            message_type: self.decode_message_type()?,
-            sequence_number: self.decode_sequence_number()?,
-            notifications: self.decode_notifications()?,
-            broadcast: self.decode_broadcast()?,
-        })
+    fn decode_message(&mut self) -> Result<ProtocolMessage> {
+        let message_type = self.decode_message_type()?;
+        let message = match message_type {
+            MessageType::Ping => ProtocolMessage::Ping {
+                sequence_number: self.decode_sequence_number()?,
+                notifications: self.decode_notifications()?,
+                broadcast: self.decode_broadcast()?,
+            },
+            MessageType::PingAck => ProtocolMessage::Ack {
+                sequence_number: self.decode_sequence_number()?,
+                notifications: self.decode_notifications()?,
+                broadcast: self.decode_broadcast()?,
+            },
+            MessageType::PingIndirect => ProtocolMessage::PingRequestMessage {
+                sequence_number: self.decode_sequence_number()?,
+                target: self.decode_target()?,
+            },
+        };
+        Ok(message)
     }
 
     fn decode_message_type(&mut self) -> Result<MessageType> {
@@ -76,17 +88,25 @@ impl<'a> MessageDecoder<'a> {
             0 => Notification::Alive { member },
             1 => Notification::Suspect { member },
             2 => Notification::Confirm { member },
-            3 => Notification::Check { member },
             x => return Err(format_err!("Unsupported notification: {}", x)),
         };
         Ok(notification)
     }
 
     fn decode_member(&mut self, address_type: u8) -> Result<Member> {
+        let address = self.decode_address(address_type)?;
+        if self.buffer.remaining() < std::mem::size_of::<u64>() {
+            return Err(format_err!("Could not decode member"));
+        }
+        Ok(Member {
+            address,
+            incarnation: self.buffer.get_u64_be(),
+        })
+    }
+
+    fn decode_address(&mut self, address_type: u8) -> Result<SocketAddr> {
         // FIXME: The first value should depend on the `address_type`.
-        if self.buffer.remaining()
-            < (std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + std::mem::size_of::<u64>())
-        {
+        if self.buffer.remaining() < (std::mem::size_of::<u32>() + std::mem::size_of::<u16>()) {
             return Err(format_err!("Could not decode member"));
         }
         let address = match address_type {
@@ -102,11 +122,7 @@ impl<'a> MessageDecoder<'a> {
             1 => return Err(format_err!("Support for IPv6 is not implemented yet")),
             x => return Err(format_err!("Unsupported address type: {}", x)),
         };
-
-        Ok(Member {
-            address,
-            incarnation: self.buffer.get_u64_be(),
-        })
+        Ok(address)
     }
 
     fn decode_broadcast(&mut self) -> Result<Vec<Member>> {
@@ -127,9 +143,23 @@ impl<'a> MessageDecoder<'a> {
         }
         Ok(result)
     }
+
+    fn decode_target(&mut self) -> Result<SocketAddr> {
+        if !self.buffer.has_remaining() {
+            return Err(format_err!("Could not decode ping request target"));
+        }
+        let header = self.buffer.get_u8();
+        // Target header:
+        // +----------------+
+        // [7][6|5|4|3|2|1|0]
+        // +----------------+
+        // 0-6: reserved
+        // 7: IP address type
+        self.decode_address(header >> 7)
+    }
 }
 
-pub(crate) fn decode_message(buffer: &[u8]) -> Result<PingAckMessage> {
+pub(crate) fn decode_message(buffer: &[u8]) -> Result<ProtocolMessage> {
     // 1. check protocol version in buffer
     // 2. create proper decoder
     MessageDecoder::decode(buffer)
