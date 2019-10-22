@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use crate::incoming_message::IncomingMessage;
+use crate::incoming_message::PingAckMessage;
 use crate::least_disseminated_members::DisseminatedMembers;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
@@ -23,7 +23,7 @@ use std::time::Duration;
 
 struct IncomingLetter {
     sender: SocketAddr,
-    message: IncomingMessage,
+    message: PingAckMessage,
 }
 
 impl fmt::Debug for IncomingLetter {

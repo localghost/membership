@@ -1,4 +1,4 @@
-use crate::incoming_message::IncomingMessage;
+use crate::incoming_message::PingAckMessage;
 use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
@@ -13,15 +13,15 @@ struct MessageDecoder<'a> {
 }
 
 impl<'a> MessageDecoder<'a> {
-    fn decode(buffer: &[u8]) -> Result<IncomingMessage> {
+    fn decode(buffer: &[u8]) -> Result<PingAckMessage> {
         MessageDecoder {
             buffer: Cursor::new(buffer),
         }
         .decode_message()
     }
 
-    fn decode_message(&mut self) -> Result<IncomingMessage> {
-        Ok(IncomingMessage {
+    fn decode_message(&mut self) -> Result<PingAckMessage> {
+        Ok(PingAckMessage {
             message_type: self.decode_message_type()?,
             sequence_number: self.decode_sequence_number()?,
             notifications: self.decode_notifications()?,
@@ -129,7 +129,7 @@ impl<'a> MessageDecoder<'a> {
     }
 }
 
-pub(crate) fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
+pub(crate) fn decode_message(buffer: &[u8]) -> Result<PingAckMessage> {
     // 1. check protocol version in buffer
     // 2. create proper decoder
     MessageDecoder::decode(buffer)
