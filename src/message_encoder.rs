@@ -6,19 +6,32 @@ use bytes::{BufMut, Bytes, BytesMut};
 use failure::format_err;
 use std::net::SocketAddr;
 
-struct OutgoingMessage {
-    buffer: BytesMut,
-    num_notifications: usize,
-    num_broadcast: usize,
+struct PingRequestMessage {
+    buffer: Bytes,
 }
 
-impl OutgoingMessage {
-    fn num_notifications(&self) -> usize {
-        self.num_notifications
-    }
+struct PingMessage {}
+struct AckMessage {}
 
-    fn num_broadcast(&self) -> usize {
-        self.num_broadcast
+struct OutgoingMessage {
+    buffer: Bytes,
+}
+
+fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> OutgoingMessage {
+    let mut buffer = BytesMut::new();
+    buffer.put_u8(0u8);
+    buffer.put_u64_be(sequence_number);
+    match target {
+        SocketAddr::V4(address) => {
+            buffer.put_slice(&address.ip().octets());
+            buffer.put_u16_be(address.port());
+        }
+        SocketAddr::V6(address) => {
+            unimplemented!();
+        }
+    };
+    OutgoingMessage {
+        buffer: buffer.freeze(),
     }
 }
 
@@ -27,8 +40,6 @@ pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
         encoder: MessageEncoder {
             message: OutgoingMessage {
                 buffer: BytesMut::with_capacity(max_size),
-                num_notifications: 0,
-                num_broadcast: 0,
             },
         },
     }
