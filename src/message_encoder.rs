@@ -14,10 +14,22 @@ struct PingMessage {}
 struct AckMessage {}
 
 struct OutgoingMessage {
-    buffer: Bytes,
+    buffer: BytesMut,
+    num_notifications: usize,
+    num_broadcast: usize,
 }
 
-fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> OutgoingMessage {
+impl OutgoingMessage {
+    fn num_notifications(&self) -> usize {
+        self.num_notifications
+    }
+
+    fn num_broadcast(&self) -> usize {
+        self.num_broadcast
+    }
+}
+
+fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> PingRequestMessage {
     let mut buffer = BytesMut::new();
     buffer.put_u8(0u8);
     buffer.put_u64_be(sequence_number);
@@ -30,7 +42,7 @@ fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> Outg
             unimplemented!();
         }
     };
-    OutgoingMessage {
+    PingRequestMessage {
         buffer: buffer.freeze(),
     }
 }
@@ -40,6 +52,8 @@ pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
         encoder: MessageEncoder {
             message: OutgoingMessage {
                 buffer: BytesMut::with_capacity(max_size),
+                num_notifications: 0,
+                num_broadcast: 0,
             },
         },
     }

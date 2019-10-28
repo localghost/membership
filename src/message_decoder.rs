@@ -1,4 +1,4 @@
-use crate::incoming_message::ProtocolMessage;
+use crate::incoming_message::IncomingMessage;
 use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
@@ -13,27 +13,27 @@ struct MessageDecoder<'a> {
 }
 
 impl<'a> MessageDecoder<'a> {
-    fn decode(buffer: &[u8]) -> Result<ProtocolMessage> {
+    fn decode(buffer: &[u8]) -> Result<IncomingMessage> {
         MessageDecoder {
             buffer: Cursor::new(buffer),
         }
         .decode_message()
     }
 
-    fn decode_message(&mut self) -> Result<ProtocolMessage> {
+    fn decode_message(&mut self) -> Result<IncomingMessage> {
         let message_type = self.decode_message_type()?;
         let message = match message_type {
-            MessageType::Ping => ProtocolMessage::Ping {
+            MessageType::Ping => IncomingMessage::Ping {
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
             },
-            MessageType::PingAck => ProtocolMessage::Ack {
+            MessageType::PingAck => IncomingMessage::Ack {
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
             },
-            MessageType::PingIndirect => ProtocolMessage::PingRequestMessage {
+            MessageType::PingIndirect => IncomingMessage::PingRequestMessage {
                 sequence_number: self.decode_sequence_number()?,
                 target: self.decode_target()?,
             },
@@ -159,7 +159,7 @@ impl<'a> MessageDecoder<'a> {
     }
 }
 
-pub(crate) fn decode_message(buffer: &[u8]) -> Result<ProtocolMessage> {
+pub(crate) fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
     // 1. check protocol version in buffer
     // 2. create proper decoder
     MessageDecoder::decode(buffer)

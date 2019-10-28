@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use crate::incoming_message::PingAckMessage;
+use crate::incoming_message::{DisseminationMessage, IncomingMessage, PingRequestMessage};
 use crate::least_disseminated_members::DisseminatedMembers;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
@@ -23,7 +23,7 @@ use std::time::Duration;
 
 struct IncomingLetter {
     sender: SocketAddr,
-    message: PingAckMessage,
+    message: IncomingMessage,
 }
 
 impl fmt::Debug for IncomingLetter {
@@ -336,11 +336,11 @@ impl SyncNode {
     fn handle_protocol_event(&mut self, event: &Event) {
         if event.readiness().is_readable() {
             if let Some(letter) = self.recv_letter() {
-                self.update_members_from_letter(&letter);
-                match letter.message.message_type {
-                    MessageType::Ping => self.handle_ping(&letter),
-                    MessageType::PingAck => self.handle_ack(&letter),
-                    MessageType::PingIndirect => self.handle_indirect_ping(&letter),
+                self.update_state(&letter);
+                match letter.message {
+                    IncomingMessage::Ping(m) => self.handle_ping(&letter.sender, &m),
+                    IncomingMessage::Ack(m) => self.handle_ack(&letter.sender, &m),
+                    IncomingMessage::PingRequest(m) => self.handle_indirect_ping(&letter.sender, &m),
                 }
             }
         } else if event.readiness().is_writable() {
@@ -432,52 +432,50 @@ impl SyncNode {
         }
     }
 
-    fn update_members_from_letter(&mut self, letter: &IncomingLetter) {
-        match letter.message.get_type() {
+    fn update_state(&mut self, message: &DisseminationMessage) {
+        match message.message.get_type() {
             MessageType::PingIndirect => self.update_members(
-                letter
+                message
                     .message
                     .get_alive_members()
                     .into_iter()
                     .skip(1)
-                    .chain(std::iter::once(letter.sender)),
-                letter.message.get_dead_members().into_iter(),
+                    .chain(std::iter::once(message.sender)),
+                message.message.get_dead_members().into_iter(),
             ),
             _ => self.update_members(
-                letter
+                message
                     .message
                     .get_alive_members()
                     .into_iter()
-                    .chain(std::iter::once(letter.sender)),
-                letter.message.get_dead_members().into_iter(),
+                    .chain(std::iter::once(message.sender)),
+                message.message.get_dead_members().into_iter(),
             ),
         }
     }
 
-    fn handle_ack(&mut self, letter: &IncomingLetter) {
+    fn handle_ack(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
         for ack in self.acks.drain(..).collect::<Vec<_>>() {
             match ack.request {
                 Request::PingIndirect(ref header) => {
-                    if letter.message.get_alive_members()[0] == header.target
-                        && letter.message.sequence_number == header.sequence_number
-                    {
+                    if *sender == header.target && message.sequence_number == header.sequence_number {
                         continue;
                     }
                 }
                 Request::PingProxy(ref header, ref reply_to) => {
-                    if letter.sender == header.target && letter.message.sequence_number == header.sequence_number {
+                    if *sender == header.target && message.sequence_number == header.sequence_number {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 target: *reply_to,
-                                sequence_number: letter.message.sequence_number,
+                                sequence_number: message.sequence_number,
                             },
-                            letter.sender,
+                            *sender,
                         ));
                         continue;
                     }
                 }
                 Request::Ping(ref header) => {
-                    if letter.sender == header.target && letter.message.sequence_number == header.sequence_number {
+                    if *sender == header.target && message.sequence_number == header.sequence_number {
                         continue;
                     }
                 }
@@ -487,20 +485,20 @@ impl SyncNode {
         }
     }
 
-    fn handle_ping(&mut self, letter: &IncomingLetter) {
+    fn handle_ping(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
         self.requests.push_back(Request::Ack(Header {
-            target: letter.sender,
-            sequence_number: letter.message.sequence_number,
+            target: *sender,
+            sequence_number: message.sequence_number,
         }));
     }
 
-    fn handle_indirect_ping(&mut self, letter: &IncomingLetter) {
+    fn handle_indirect_ping(&mut self, sender: &SocketAddr, message: &PingRequestMessage) {
         self.requests.push_back(Request::PingProxy(
             Header {
-                target: letter.message.get_alive_members()[0],
-                sequence_number: letter.message.sequence_number,
+                target: message.target,
+                sequence_number: message.sequence_number,
             },
-            letter.sender,
+            *sender,
         ));
     }
 }
