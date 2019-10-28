@@ -25,7 +25,7 @@ where
         self.items.push((item, 0));
     }
 
-    pub(crate) fn remove(&mut self, item: T) {
+    pub(crate) fn remove(&mut self, item: &T) {
         self.items.remove(self.items.iter().position(|m| m.0 == item).unwrap());
     }
 

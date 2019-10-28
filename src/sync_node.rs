@@ -1,9 +1,12 @@
 #![deny(missing_docs)]
 
+use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessage, IncomingMessage, PingRequestMessage};
 use crate::least_disseminated_members::DisseminatedMembers;
+use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
+use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::unique_circular_buffer::UniqueCircularBuffer;
@@ -76,11 +79,13 @@ pub(crate) enum ChannelMessage {
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    members: Vec<SocketAddr>,
+    members: Vec<Member>,
+    broadcast: Disseminated<Member>,
+    notifications: Disseminated<Notification>,
     alive_disseminated_members: DisseminatedMembers,
     suspected_disseminated_members: DisseminatedMembers,
     dead_members: UniqueCircularBuffer<SocketAddr>,
-    members_presence: HashSet<SocketAddr>,
+    members_presence: HashSet<Member>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -258,24 +263,21 @@ impl SyncNode {
         }
     }
 
-    fn update_members<T1, T2>(&mut self, alive: T1, dead: T2)
-    where
-        T1: Iterator<Item = SocketAddr>,
-        T2: Iterator<Item = SocketAddr>,
-    {
-        // 'alive' notification beats 'dead' notification
-        self.remove_members(dead);
-        for member in alive {
-            if member == self.myself {
-                continue;
-            }
-            if self.members_presence.insert(member) {
+    fn update_members(&mut self, members: impl Iterator<Item = &Member>) {
+        for member in members {
+            if self.members_presence.insert(*member) {
                 info!("Member joined: {:?}", member);
-                self.members.push(member);
-                self.alive_disseminated_members.add_member(member);
+                self.members.push(*member);
             }
-            if self.dead_members.remove(&member) > 0 {
-                info!("Member {} found on the dead list", member);
+        }
+    }
+
+    fn update_notifications(&mut self, notifications: impl Iterator<Item = &Notification>) {
+        for notification in notifications {
+            match notification {
+                Notification::Confirm { member } => self.remove_member(member),
+                Notification::Alive { member } => self.handle_alive(member),
+                Notification::Suspect { member } => self.handle_suspect(member),
             }
         }
     }
@@ -299,11 +301,11 @@ impl SyncNode {
         }
     }
 
-    fn remove_member(&mut self, member: &SocketAddr) {
+    fn remove_member(&mut self, member: &Member) {
         if self.members_presence.remove(&member) {
             let idx = self.members.iter().position(|e| e == member).unwrap();
             self.members.remove(idx);
-            self.alive_disseminated_members.remove_member(*member);
+            self.broadcast.remove(member);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
@@ -336,7 +338,6 @@ impl SyncNode {
     fn handle_protocol_event(&mut self, event: &Event) {
         if event.readiness().is_readable() {
             if let Some(letter) = self.recv_letter() {
-                self.update_state(&letter);
                 match letter.message {
                     IncomingMessage::Ping(m) => self.handle_ping(&letter.sender, &m),
                     IncomingMessage::Ack(m) => self.handle_ack(&letter.sender, &m),
@@ -433,28 +434,12 @@ impl SyncNode {
     }
 
     fn update_state(&mut self, message: &DisseminationMessage) {
-        match message.message.get_type() {
-            MessageType::PingIndirect => self.update_members(
-                message
-                    .message
-                    .get_alive_members()
-                    .into_iter()
-                    .skip(1)
-                    .chain(std::iter::once(message.sender)),
-                message.message.get_dead_members().into_iter(),
-            ),
-            _ => self.update_members(
-                message
-                    .message
-                    .get_alive_members()
-                    .into_iter()
-                    .chain(std::iter::once(message.sender)),
-                message.message.get_dead_members().into_iter(),
-            ),
-        }
+        self.update_notifications(message.notifications.iter());
+        self.update_members2(message.broadcast.iter());
     }
 
     fn handle_ack(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
+        self.update_state(message);
         for ack in self.acks.drain(..).collect::<Vec<_>>() {
             match ack.request {
                 Request::PingIndirect(ref header) => {
@@ -486,6 +471,7 @@ impl SyncNode {
     }
 
     fn handle_ping(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
+        self.update_state(message);
         self.requests.push_back(Request::Ack(Header {
             target: *sender,
             sequence_number: message.sequence_number,
