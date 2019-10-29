@@ -85,7 +85,7 @@ pub(crate) struct SyncNode {
     alive_disseminated_members: DisseminatedMembers,
     suspected_disseminated_members: DisseminatedMembers,
     dead_members: UniqueCircularBuffer<SocketAddr>,
-    members_presence: HashSet<Member>,
+    members_presence: HashSet<SocketAddr>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -263,21 +263,29 @@ impl SyncNode {
         }
     }
 
-    fn update_members(&mut self, members: impl Iterator<Item = &Member>) {
+    fn update_members<'a>(&mut self, members: impl Iterator<Item = &'a Member>) {
         for member in members {
-            if self.members_presence.insert(*member) {
+            if self.members_presence.insert(member.address) {
                 info!("Member joined: {:?}", member);
                 self.members.push(*member);
             }
         }
     }
 
-    fn update_notifications(&mut self, notifications: impl Iterator<Item = &Notification>) {
+    fn update_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) {
         for notification in notifications {
             match notification {
                 Notification::Confirm { member } => self.remove_member(member),
                 Notification::Alive { member } => self.handle_alive(member),
                 Notification::Suspect { member } => self.handle_suspect(member),
+            }
+        }
+    }
+
+    fn handle_alive(&mut self, notification: &Notification) {
+        for n in self.notifications {
+            match n {
+                Notification::Alive {member} => if notification
             }
         }
     }
@@ -302,7 +310,7 @@ impl SyncNode {
     }
 
     fn remove_member(&mut self, member: &Member) {
-        if self.members_presence.remove(&member) {
+        if self.members_presence.remove(&member.address) {
             let idx = self.members.iter().position(|e| e == member).unwrap();
             self.members.remove(idx);
             self.broadcast.remove(member);
@@ -435,7 +443,7 @@ impl SyncNode {
 
     fn update_state(&mut self, message: &DisseminationMessage) {
         self.update_notifications(message.notifications.iter());
-        self.update_members2(message.broadcast.iter());
+        self.update_members(message.broadcast.iter());
     }
 
     fn handle_ack(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
