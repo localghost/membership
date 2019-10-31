@@ -26,7 +26,7 @@ where
     }
 
     pub(crate) fn remove(&mut self, item: &T) {
-        self.items.remove(self.items.iter().position(|m| m.0 == item).unwrap());
+        self.items.remove(self.items.iter().position(|m| m.0 == *item).unwrap());
     }
 
     fn update(&mut self) {
