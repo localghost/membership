@@ -74,3 +74,27 @@ enum NotificationType {
     Suspect,
     Confirm,
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_comparison() {
+        let alive = Notification::Confirm {
+            member: Member {
+                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                incarnation: 1,
+            },
+        };
+        let confirm = Notification::Confirm {
+            member: Member {
+                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                incarnation: 1,
+            },
+        };
+        assert!(alive < confirm);
+    }
+}

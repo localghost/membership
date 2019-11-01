@@ -266,11 +266,14 @@ impl SyncNode {
             if self.members_presence.insert(member.address) {
                 info!("Member joined: {:?}", member);
                 self.members.push(*member);
+                self.broadcast.add(*member);
             }
         }
     }
 
     fn update_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) {
+        // TODO: check this does not miss notifications with not yet seen members
+        let notifications = notifications.filter(|n| self.notifications.iter().find(|n2| n2 >= n).is_none());
         for notification in notifications {
             match notification {
                 Notification::Confirm { member } => self.remove_member(member),
@@ -280,12 +283,12 @@ impl SyncNode {
         }
     }
 
-    fn handle_alive(&mut self, notification: &Notification) {
-        for n in self.notifications {
-            match n {
-                Notification::Alive {member} => if notification
-            }
-        }
+    fn handle_alive(&mut self, member: &Member) {
+        self.update_members(std::iter::once(member));
+    }
+
+    fn handle_suspect(&mut self, member: &Member) {
+        // TODO: add new suspicion
     }
 
     fn kill_members<T>(&mut self, members: T)
