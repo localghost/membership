@@ -4,9 +4,11 @@ use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 type Incarnation = u64;
+type Id =
 
 #[derive(Debug)]
 pub(crate) struct Member {
+    pub(crate) id: Id,
     pub(crate) address: SocketAddr,
     pub(crate) incarnation: Incarnation,
 }

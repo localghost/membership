@@ -83,7 +83,7 @@ mod test {
 
     #[test]
     fn test_comparison() {
-        let alive = Notification::Confirm {
+        let alive = Notification::Alive {
             member: Member {
                 address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
                 incarnation: 1,
