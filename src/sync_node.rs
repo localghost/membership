@@ -11,8 +11,8 @@ use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::unique_circular_buffer::UniqueCircularBuffer;
 use crate::ProtocolConfig;
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+//use crypto::digest::Digest;
+//use crypto::sha1::Sha1;
 use failure::{format_err, ResultExt};
 use log::{debug, info, warn};
 use mio::net::UdpSocket;
@@ -113,10 +113,7 @@ impl SyncNode {
             epoch: 0,
             sequence_number: 0,
             recv_buffer: Vec::with_capacity(1500),
-            myself: Member {
-                address: bind_address,
-                incarnation: 0,
-            },
+            myself: Member::new(bind_address),
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
