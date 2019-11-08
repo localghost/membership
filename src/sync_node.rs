@@ -3,6 +3,7 @@
 use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessage, IncomingMessage, PingRequestMessage};
 use crate::least_disseminated_members::DisseminatedMembers;
+use crate::member::Id as MemberId;
 use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
@@ -21,7 +22,7 @@ use mio_extras::channel::{Receiver, Sender};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -81,11 +82,11 @@ pub(crate) enum ChannelMessage {
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    members: Vec<Member>,
-    broadcast: Disseminated<Member>,
+    visit_order: Vec<MemberId>,
+    broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
     dead_members: UniqueCircularBuffer<SocketAddr>,
-    members_presence: HashSet<SocketAddr>,
+    members: HashMap<MemberId, MemberId>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -104,11 +105,11 @@ impl SyncNode {
         let gossip = SyncNode {
             config,
             server: None,
-            members: vec![],
+            visit_order: vec![],
             broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
             dead_members: UniqueCircularBuffer::new(5),
-            members_presence: HashSet::new(),
+            members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
@@ -157,7 +158,7 @@ impl SyncNode {
                                 }
                                 ChannelMessage::GetMembers(sender) => {
                                     let members = std::iter::once(&self.myself)
-                                        .chain(self.members.iter())
+                                        .chain(self.visit_order.iter())
                                         .cloned()
                                         .collect::<Vec<_>>();
                                     if let Err(e) = sender.send(members) {
@@ -265,9 +266,9 @@ impl SyncNode {
 
     fn update_members<'a>(&mut self, members: impl Iterator<Item = &'a Member>) {
         for member in members {
-            if self.members_presence.insert(member.address) {
+            if self.members.insert(member.id, member).is_none() {
                 info!("Member joined: {:?}", member);
-                self.members.push(*member);
+                self.visit_order.push(*member);
                 self.broadcast.add(*member);
             }
         }
@@ -285,17 +286,17 @@ impl SyncNode {
         }
     }
 
-    fn handle_alive(&mut self, member: &Member) {
+    fn handle_alive(&mut self, member: &MemberId) {
         self.update_members(std::iter::once(member));
     }
 
-    fn handle_suspect(&mut self, member: &Member) {
+    fn handle_suspect(&mut self, member: &MemberId) {
         // TODO: add new suspicion
     }
 
     fn kill_members<T>(&mut self, members: T)
     where
-        T: Iterator<Item = SocketAddr>,
+        T: Iterator<Item = Member>,
     {
         for member in members {
             self.remove_member(&member);
@@ -305,7 +306,7 @@ impl SyncNode {
 
     fn remove_members<T>(&mut self, members: T)
     where
-        T: Iterator<Item = SocketAddr>,
+        T: Iterator<Item = Member>,
     {
         for member in members {
             self.remove_member(&member);
@@ -313,10 +314,10 @@ impl SyncNode {
     }
 
     fn remove_member(&mut self, member: &Member) {
-        if self.members_presence.remove(&member.address) {
-            let idx = self.members.iter().position(|e| e == member).unwrap();
-            self.members.remove(idx);
-            self.broadcast.remove(member);
+        if self.members.remove(&member.id).is_some() {
+            let idx = self.visit_order.iter().position(|e| *e == member.id).unwrap();
+            self.visit_order.remove(idx);
+            self.broadcast.remove(&member.id);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
@@ -325,7 +326,7 @@ impl SyncNode {
     }
 
     fn get_next_member(&mut self) -> Option<SocketAddr> {
-        if self.members.is_empty() {
+        if self.visit_order.is_empty() {
             return None;
         }
         // Following SWIM paper, section 4.3, next member to probe is picked in round-robin fashion, with all
@@ -333,10 +334,10 @@ impl SyncNode {
         // FIXME: one thing that is missing is that new members are always added at the end instead of at uniformly
         // random position.
         if self.next_member_index == 0 {
-            self.members.shuffle(&mut self.rng);
+            self.visit_order.shuffle(&mut self.rng);
         }
-        let target = self.members[self.next_member_index];
-        self.next_member_index = (self.next_member_index + 1) % self.members.len();
+        let target = self.visit_order[self.next_member_index];
+        self.next_member_index = (self.next_member_index + 1) % self.visit_order.len();
         Some(target)
     }
 

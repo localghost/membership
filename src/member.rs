@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Incarnation = u64;
-type Id = [u8; 20];
+pub(crate) type Id = [u8; 20];
 
 #[derive(Debug)]
 pub(crate) struct Member {
