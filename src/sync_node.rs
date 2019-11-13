@@ -82,11 +82,11 @@ pub(crate) enum ChannelMessage {
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     server: Option<UdpSocket>,
-    visit_order: Vec<MemberId>,
+    ping_order: Vec<MemberId>,
     broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
     dead_members: UniqueCircularBuffer<SocketAddr>,
-    members: HashMap<MemberId, MemberId>,
+    members: HashMap<MemberId, Member>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -105,7 +105,7 @@ impl SyncNode {
         let gossip = SyncNode {
             config,
             server: None,
-            visit_order: vec![],
+            ping_order: vec![],
             broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
             dead_members: UniqueCircularBuffer::new(5),
@@ -127,7 +127,6 @@ impl SyncNode {
     pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.myself, "Can't join yourself");
 
-        self.update_members(std::iter::once(member), std::iter::empty());
         let poll = Poll::new().unwrap();
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
         self.bind(&poll)?;
@@ -137,7 +136,7 @@ impl SyncNode {
 
         let initial_ping = Request::Ping(Header {
             // the member we were given to join should be on the alive members list
-            target: self.get_next_member().unwrap(),
+            target: member,
             sequence_number: self.get_next_sequence_number(),
         });
         self.requests.push_front(initial_ping);
@@ -157,8 +156,8 @@ impl SyncNode {
                                     break 'mainloop;
                                 }
                                 ChannelMessage::GetMembers(sender) => {
-                                    let members = std::iter::once(&self.myself)
-                                        .chain(self.visit_order.iter())
+                                    let members = std::iter::once(&self.myself.address)
+                                        .chain(self.members.values().map(|m| &m.address))
                                         .cloned()
                                         .collect::<Vec<_>>();
                                     if let Err(e) = sender.send(members) {
@@ -221,7 +220,7 @@ impl SyncNode {
     }
 
     fn bind(&mut self, poll: &Poll) -> Result<()> {
-        self.server = Some(UdpSocket::bind(&self.myself).context("Failed to bind to socket")?);
+        self.server = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind to socket")?);
         // FIXME: change to `PollOpt::edge()`
         poll.register(
             self.server.as_ref().unwrap(),
@@ -266,10 +265,10 @@ impl SyncNode {
 
     fn update_members<'a>(&mut self, members: impl Iterator<Item = &'a Member>) {
         for member in members {
-            if self.members.insert(member.id, member).is_none() {
+            if self.members.insert(member.id, *member).is_none() {
                 info!("Member joined: {:?}", member);
-                self.visit_order.push(*member);
-                self.broadcast.add(*member);
+                self.ping_order.push(member.id);
+                self.broadcast.add(member.id);
             }
         }
     }
@@ -286,11 +285,11 @@ impl SyncNode {
         }
     }
 
-    fn handle_alive(&mut self, member: &MemberId) {
+    fn handle_alive(&mut self, member: &Member) {
         self.update_members(std::iter::once(member));
     }
 
-    fn handle_suspect(&mut self, member: &MemberId) {
+    fn handle_suspect(&mut self, member: &Member) {
         // TODO: add new suspicion
     }
 
@@ -315,8 +314,8 @@ impl SyncNode {
 
     fn remove_member(&mut self, member: &Member) {
         if self.members.remove(&member.id).is_some() {
-            let idx = self.visit_order.iter().position(|e| *e == member.id).unwrap();
-            self.visit_order.remove(idx);
+            let idx = self.ping_order.iter().position(|e| *e == member.id).unwrap();
+            self.ping_order.remove(idx);
             self.broadcast.remove(&member.id);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
@@ -326,7 +325,7 @@ impl SyncNode {
     }
 
     fn get_next_member(&mut self) -> Option<SocketAddr> {
-        if self.visit_order.is_empty() {
+        if self.ping_order.is_empty() {
             return None;
         }
         // Following SWIM paper, section 4.3, next member to probe is picked in round-robin fashion, with all
@@ -334,10 +333,10 @@ impl SyncNode {
         // FIXME: one thing that is missing is that new members are always added at the end instead of at uniformly
         // random position.
         if self.next_member_index == 0 {
-            self.visit_order.shuffle(&mut self.rng);
+            self.ping_order.shuffle(&mut self.rng);
         }
-        let target = self.visit_order[self.next_member_index];
-        self.next_member_index = (self.next_member_index + 1) % self.visit_order.len();
+        let target = self.ping_order[self.next_member_index];
+        self.next_member_index = (self.next_member_index + 1) % self.ping_order.len();
         Some(target)
     }
 
