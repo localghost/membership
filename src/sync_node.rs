@@ -16,7 +16,7 @@ use crate::ProtocolConfig;
 //use crypto::sha1::Sha1;
 use failure::{format_err, ResultExt};
 use log::{debug, info, warn};
-use mio::net::UdpSocket;
+use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Event, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{Receiver, Sender};
 use rand::rngs::SmallRng;
@@ -81,7 +81,8 @@ pub(crate) enum ChannelMessage {
 /// Runs the protocol on current thread, blocking it.
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
-    server: Option<UdpSocket>,
+    udp: Option<UdpSocket>,
+    tcp: Option<TcpListener>,
     ping_order: Vec<MemberId>,
     broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
@@ -104,7 +105,8 @@ impl SyncNode {
         let (sender, receiver) = mio_extras::channel::channel();
         let gossip = SyncNode {
             config,
-            server: None,
+            udp: None,
+            tcp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
@@ -170,6 +172,10 @@ impl SyncNode {
                             debug!("Not ready yet: {:?}", e);
                         }
                     },
+                    //                    Token(100) => match self.tcp.unwrap().accept() {
+                    //                        Ok(stream) => stream.,
+                    //                        Err(e) => warn!("Failed to accept TCP connection: {:?}", e);
+                    //                    },
                     _ => unreachable!(),
                 }
             }
@@ -220,20 +226,29 @@ impl SyncNode {
     }
 
     fn bind(&mut self, poll: &Poll) -> Result<()> {
-        self.server = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind to socket")?);
+        self.udp = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind UDP socket")?);
         // FIXME: change to `PollOpt::edge()`
         poll.register(
-            self.server.as_ref().unwrap(),
+            self.udp.as_ref().unwrap(),
             Token(0),
             Ready::readable() | Ready::writable(),
             PollOpt::level(),
         )
-        .map_err(|e| format_err!("Failed to register socket for polling: {:?}", e))
+        .map_err(|e| format_err!("Failed to register UDP socket for polling: {:?}", e))?;
+
+        self.tcp = Some(TcpListener::bind(&self.myself.address).context("Failed to bind TCP socket")?);
+        poll.register(
+            self.tcp.as_ref().unwrap(),
+            Token(100),
+            Ready::readable() | Ready::writable(),
+            PollOpt::level(),
+        )
+        .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
     fn send_message(&mut self, target: &SocketAddr, message: &Message) {
         debug!("{:?} <- {:?}", target, message);
-        let result = self.server.as_ref().unwrap().send_to(&message.buffer(), target);
+        let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), target);
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
@@ -243,7 +258,7 @@ impl SyncNode {
     }
 
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
-        match self.server.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
+        match self.udp.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
             Ok((count, sender)) => {
                 let message = match decode_message(&self.recv_buffer[..count]) {
                     Ok(message) => message,
