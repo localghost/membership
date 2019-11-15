@@ -290,6 +290,7 @@ impl SyncNode {
 
     fn update_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) {
         // TODO: check this does not miss notifications with not yet seen members
+        // TODO: remove from self.notifications those notifications that are overridden by the new ones
         let notifications = notifications.filter(|n| self.notifications.iter().find(|n2| n2 >= n).is_none());
         for notification in notifications {
             match notification {
@@ -305,7 +306,7 @@ impl SyncNode {
     }
 
     fn handle_suspect(&mut self, member: &Member) {
-        // TODO: add new suspicion
+        self.suspicions.push_back(Suspicion::new(member.id));
     }
 
     fn kill_members<T>(&mut self, members: T)
