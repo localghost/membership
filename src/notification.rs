@@ -8,18 +8,6 @@ pub(crate) enum Notification {
     Confirm { member: Member },
 }
 
-impl From<&[u8]> for Notification {
-    fn from(buffer: &[u8]) -> Self {
-        let member = Member::from(&buffer[1..]);
-        match buffer[0] {
-            x if x == NotificationType::Alive as u8 => Notification::Alive { member },
-            x if x == NotificationType::Suspect as u8 => Notification::Suspect { member },
-            x if x == NotificationType::Confirm as u8 => Notification::Confirm { member },
-            _ => panic!("No such message type"),
-        }
-    }
-}
-
 impl PartialEq for Notification {
     fn eq(&self, other: &Self) -> bool {
         self.member() == other.member()

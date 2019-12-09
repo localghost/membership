@@ -44,7 +44,7 @@ impl fmt::Debug for IncomingLetter {
 
 #[derive(Debug)]
 struct Header {
-    target: SocketAddr,
+    member_id: MemberId,
     sequence_number: u64,
 }
 
@@ -219,6 +219,7 @@ impl SyncNode {
             }
             Request::PingIndirect(header) | Request::PingProxy(header, ..) => {
                 // TODO: mark the member as suspected
+                self.handle_suspect(header.member_id)
                 self.kill_members(std::iter::once(header.target));
             }
             _ => unreachable!(),
@@ -299,6 +300,7 @@ impl SyncNode {
                 Notification::Suspect { member } => self.handle_suspect(member),
             }
         }
+        // TODO: merge notifications into existing ones
     }
 
     fn handle_alive(&mut self, member: &Member) {
@@ -307,16 +309,6 @@ impl SyncNode {
 
     fn handle_suspect(&mut self, member: &Member) {
         self.suspicions.push_back(Suspicion::new(member.id));
-    }
-
-    fn kill_members<T>(&mut self, members: T)
-    where
-        T: Iterator<Item = Member>,
-    {
-        for member in members {
-            self.remove_member(&member);
-            self.dead_members.push(member);
-        }
     }
 
     fn remove_members<T>(&mut self, members: T)
@@ -340,7 +332,7 @@ impl SyncNode {
         }
     }
 
-    fn get_next_member(&mut self) -> Option<SocketAddr> {
+    fn get_next_member(&mut self) -> Option<MemberId> {
         if self.ping_order.is_empty() {
             return None;
         }
