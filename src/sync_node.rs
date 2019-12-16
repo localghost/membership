@@ -7,6 +7,7 @@ use crate::member::Id as MemberId;
 use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
+use crate::message_encoder::encode_message;
 use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
@@ -14,6 +15,7 @@ use crate::unique_circular_buffer::UniqueCircularBuffer;
 use crate::ProtocolConfig;
 //use crypto::digest::Digest;
 //use crypto::sha1::Sha1;
+use bytes::Bytes;
 use failure::{format_err, ResultExt};
 use log::{debug, info, warn};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
@@ -65,6 +67,7 @@ impl Ack {
 
 #[derive(Debug)]
 enum Request {
+    Init(SocketAddr),
     Ping(Header),
     PingIndirect(Header),
     PingProxy(Header, SocketAddr),
@@ -136,12 +139,7 @@ impl SyncNode {
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
 
-        let initial_ping = Request::Ping(Header {
-            // the member we were given to join should be on the alive members list
-            target: member,
-            sequence_number: self.get_next_sequence_number(),
-        });
-        self.requests.push_front(initial_ping);
+        self.requests.push_front(Request::Init(member));
 
         'mainloop: loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
@@ -219,7 +217,7 @@ impl SyncNode {
             }
             Request::PingIndirect(header) | Request::PingProxy(header, ..) => {
                 // TODO: mark the member as suspected
-                self.handle_suspect(header.member_id)
+                self.handle_suspect(header.member_id);
                 self.kill_members(std::iter::once(header.target));
             }
             _ => unreachable!(),
@@ -250,6 +248,16 @@ impl SyncNode {
     fn send_message(&mut self, target: &SocketAddr, message: &Message) {
         debug!("{:?} <- {:?}", target, message);
         let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), target);
+        if let Err(e) = result {
+            warn!("Message to {:?} was not delivered due to {:?}", target, e);
+        } else {
+            // FIXME: the disseminated members should be updated only when Ack is received
+            self.alive_disseminated_members.update_members(message.count_alive());
+        }
+    }
+
+    fn send_message2(&mut self, target: &SocketAddr, buffer: &Bytes) {
+        let result = self.udp.as_ref().unwrap().send_to(&buffer, target);
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
@@ -367,6 +375,23 @@ impl SyncNode {
             if let Some(request) = self.requests.pop_front() {
                 debug!("{:?}", request);
                 match request {
+                    Request::Init(ref address) => {
+                        let message = encode_message(1024).message_type(MessageType::Ping);
+                        if let Err(e) = message {
+                            warn!("Failed to encode message type for initial ping request");
+                        }
+                        let message = message.unwrap().sequence_number(0);
+                        if let Err(e) = message {
+                            warn!("Failed to encode sequence number for initial ping request");
+                        }
+                        let message = message.unwrap().notifications(&[]);
+                        if let Err(e) = message {
+                            warn!("Failed to add notification to initial ping request");
+                        }
+                        let message = message.unwrap().build();
+                        self.send_message(address, message);
+                        self.acks.push(Ack::new(request));
+                    }
                     Request::Ping(ref header) => {
                         let mut message = Message::create(MessageType::Ping, header.sequence_number);
                         // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
@@ -461,6 +486,11 @@ impl SyncNode {
         self.update_state(message);
         for ack in self.acks.drain(..).collect::<Vec<_>>() {
             match ack.request {
+                Request::Init(ref address) => {
+                    if sender != address || message.sequence_number != 0 {
+                        panic!("Initial ping request failed, unable to continue");
+                    }
+                }
                 Request::PingIndirect(ref header) => {
                     if *sender == header.target && message.sequence_number == header.sequence_number {
                         continue;

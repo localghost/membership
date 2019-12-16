@@ -29,6 +29,20 @@ impl OutgoingMessage {
     }
 }
 
+enum OutgoingMessageEnum {
+    DisseminationMessage(OutgoingMessage),
+    PingRequestMessage(PingRequestMessage),
+}
+
+impl OutgoingMessageEnum {
+    pub(crate) fn buffer(self) -> Bytes {
+        match self {
+            OutgoingMessageEnum::DisseminationMessage(message) => message.buffer.freeze(),
+            OutgoingMessageEnum::PingRequestMessage(message) => message.buffer,
+        }
+    }
+}
+
 fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> PingRequestMessage {
     let mut buffer = BytesMut::new();
     buffer.put_u8(0u8);
@@ -64,7 +78,7 @@ struct OutgoingMessageWithType {
 }
 
 impl OutgoingMessageWithType {
-    fn message_type(mut self, message_type: MessageType) -> Result<OutgoingMessageWithSequenceNumber> {
+    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<OutgoingMessageWithSequenceNumber> {
         self.encoder.message_type(message_type)?;
         Ok(OutgoingMessageWithSequenceNumber { encoder: self.encoder })
     }
@@ -75,7 +89,7 @@ struct OutgoingMessageWithSequenceNumber {
 }
 
 impl OutgoingMessageWithSequenceNumber {
-    fn sequence_number(mut self, sequence_number: u64) -> Result<OutgoingMessageWithNotifications> {
+    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<OutgoingMessageWithNotifications> {
         self.encoder.sequence_number(sequence_number)?;
         Ok(OutgoingMessageWithNotifications { encoder: self.encoder })
     }
@@ -86,7 +100,7 @@ struct OutgoingMessageWithNotifications {
 }
 
 impl OutgoingMessageWithNotifications {
-    fn notifications(mut self, notifications: &[Notification]) -> Result<OutgoingMessageWithBroadcast> {
+    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<OutgoingMessageWithBroadcast> {
         self.encoder.message.num_notifications = self.encoder.notifications(notifications)?;
         Ok(OutgoingMessageWithBroadcast { encoder: self.encoder })
     }
@@ -97,12 +111,12 @@ struct OutgoingMessageWithBroadcast {
 }
 
 impl OutgoingMessageWithBroadcast {
-    fn broadcast(&mut self, members: &[Member]) -> Result<()> {
+    pub(crate) fn broadcast(&mut self, members: &[Member]) -> Result<()> {
         self.encoder.message.num_broadcast = self.encoder.broadcast(members)?;
         Ok(())
     }
 
-    fn build(mut self) -> Bytes {
+    pub(crate) fn build(mut self) -> Bytes {
         self.encoder.message.buffer.freeze()
     }
 }
