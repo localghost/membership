@@ -1,5 +1,7 @@
 #![deny(missing_docs)]
 
+use failure::_core::ops::Deref;
+
 pub(crate) struct Disseminated<T> {
     items: Vec<(T, u64)>,
 }

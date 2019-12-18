@@ -6,6 +6,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use failure::format_err;
 use std::net::SocketAddr;
 
+#[derive(Debug)]
 struct PingRequestMessage {
     buffer: Bytes,
 }
@@ -13,6 +14,7 @@ struct PingRequestMessage {
 struct PingMessage {}
 struct AckMessage {}
 
+#[derive(Debug)]
 struct OutgoingMessage {
     buffer: BytesMut,
     num_notifications: usize,
@@ -20,16 +22,17 @@ struct OutgoingMessage {
 }
 
 impl OutgoingMessage {
-    fn num_notifications(&self) -> usize {
+    pub(crate) fn num_notifications(&self) -> usize {
         self.num_notifications
     }
 
-    fn num_broadcast(&self) -> usize {
+    pub(crate) fn num_broadcast(&self) -> usize {
         self.num_broadcast
     }
 }
 
-enum OutgoingMessageEnum {
+#[derive(Debug)]
+pub(crate) enum OutgoingMessageEnum {
     DisseminationMessage(OutgoingMessage),
     PingRequestMessage(PingRequestMessage),
 }
@@ -61,85 +64,95 @@ fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> Ping
     }
 }
 
-pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
-    OutgoingMessageWithType {
-        encoder: MessageEncoder {
+//pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
+//    OutgoingMessageWithType {
+//        encoder: MessageEncoder {
+//            message: OutgoingMessage {
+//                buffer: BytesMut::with_capacity(max_size),
+//                num_notifications: 0,
+//                num_broadcast: 0,
+//            },
+//        },
+//    }
+//}
+
+//struct OutgoingMessageWithType {
+//    encoder: MessageEncoder,
+//}
+//
+//impl OutgoingMessageWithType {
+//    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<OutgoingMessageWithSequenceNumber> {
+//        self.encoder.message_type(message_type)?;
+//        Ok(OutgoingMessageWithSequenceNumber { encoder: self.encoder })
+//    }
+//}
+//
+//struct OutgoingMessageWithSequenceNumber {
+//    encoder: MessageEncoder,
+//}
+//
+//impl OutgoingMessageWithSequenceNumber {
+//    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<OutgoingMessageWithNotifications> {
+//        self.encoder.sequence_number(sequence_number)?;
+//        Ok(OutgoingMessageWithNotifications { encoder: self.encoder })
+//    }
+//}
+//
+//struct OutgoingMessageWithNotifications {
+//    encoder: MessageEncoder,
+//}
+//
+//impl OutgoingMessageWithNotifications {
+//    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<OutgoingMessageWithBroadcast> {
+//        self.encoder.message.num_notifications = self.encoder.notifications(notifications)?;
+//        Ok(OutgoingMessageWithBroadcast { encoder: self.encoder })
+//    }
+//}
+//
+//struct OutgoingMessageWithBroadcast {
+//    encoder: MessageEncoder,
+//}
+//
+//impl OutgoingMessageWithBroadcast {
+//    pub(crate) fn broadcast(&mut self, members: &[Member]) -> Result<()> {
+//        self.encoder.message.num_broadcast = self.encoder.broadcast(members)?;
+//        Ok(())
+//    }
+//
+//    pub(crate) fn build(mut self) -> Bytes {
+//        self.encoder.message.buffer.freeze()
+//    }
+//}
+
+pub(crate) struct MessageEncoder {
+    message: OutgoingMessage,
+}
+
+impl MessageEncoder {
+    pub(crate) fn new(max_size: usize) -> Self {
+        MessageEncoder {
             message: OutgoingMessage {
                 buffer: BytesMut::with_capacity(max_size),
                 num_notifications: 0,
                 num_broadcast: 0,
             },
-        },
-    }
-}
-
-struct OutgoingMessageWithType {
-    encoder: MessageEncoder,
-}
-
-impl OutgoingMessageWithType {
-    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<OutgoingMessageWithSequenceNumber> {
-        self.encoder.message_type(message_type)?;
-        Ok(OutgoingMessageWithSequenceNumber { encoder: self.encoder })
-    }
-}
-
-struct OutgoingMessageWithSequenceNumber {
-    encoder: MessageEncoder,
-}
-
-impl OutgoingMessageWithSequenceNumber {
-    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<OutgoingMessageWithNotifications> {
-        self.encoder.sequence_number(sequence_number)?;
-        Ok(OutgoingMessageWithNotifications { encoder: self.encoder })
-    }
-}
-
-struct OutgoingMessageWithNotifications {
-    encoder: MessageEncoder,
-}
-
-impl OutgoingMessageWithNotifications {
-    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<OutgoingMessageWithBroadcast> {
-        self.encoder.message.num_notifications = self.encoder.notifications(notifications)?;
-        Ok(OutgoingMessageWithBroadcast { encoder: self.encoder })
-    }
-}
-
-struct OutgoingMessageWithBroadcast {
-    encoder: MessageEncoder,
-}
-
-impl OutgoingMessageWithBroadcast {
-    pub(crate) fn broadcast(&mut self, members: &[Member]) -> Result<()> {
-        self.encoder.message.num_broadcast = self.encoder.broadcast(members)?;
-        Ok(())
+        }
     }
 
-    pub(crate) fn build(mut self) -> Bytes {
-        self.encoder.message.buffer.freeze()
-    }
-}
-
-struct MessageEncoder {
-    message: OutgoingMessage,
-}
-
-impl MessageEncoder {
-    fn message_type(&mut self, message_type: MessageType) -> Result<()> {
+    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<Self> {
         if self.message.buffer.remaining_mut() < std::mem::size_of::<i32>() {
             return Err(format_err!("Could not encode message type"));
         }
         self.message.buffer.put_i32_be(message_type as i32);
-        Ok(())
+        Ok(self)
     }
 
-    fn sequence_number(&mut self, sequence_number: u64) -> Result<()> {
+    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<Self> {
         if self.message.buffer.remaining_mut() < std::mem::size_of::<i32>() {
             return Err(format_err!("Could not encode sequence number"));
         }
         self.message.buffer.put_u64_be(sequence_number);
-        Ok(())
+        Ok(self)
     }
 
     fn encode_notification(&mut self, notification: &Notification) -> Result<()> {
@@ -172,7 +185,7 @@ impl MessageEncoder {
         }
     }
 
-    fn notifications(&mut self, notifications: &[Notification]) -> Result<usize> {
+    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<Self> {
         if !self.message.buffer.has_remaining_mut() {
             return Err(format_err!("Not enough space to encode notifications"));
         }
@@ -188,10 +201,11 @@ impl MessageEncoder {
             count += 1;
         }
         self.message.buffer[count_position] = count;
-        Ok(count as usize)
+        self.message.num_notifications = count as usize;
+        Ok(self)
     }
 
-    fn broadcast(&mut self, members: &[Member]) -> Result<usize> {
+    pub(crate) fn broadcast(mut self, members: &[Member]) -> Result<Self> {
         if !self.message.buffer.has_remaining_mut() {
             return Err(format_err!("Not enough space to encode broadcast"));
         }
@@ -206,11 +220,12 @@ impl MessageEncoder {
             count += 1;
         }
         self.message.buffer[count_position] = count;
-        Ok(count as usize)
+        self.message.num_broadcast = count as usize;
+        Ok(self)
     }
 
-    fn build(self) -> Bytes {
-        self.message.buffer.freeze()
+    pub(crate) fn encode(self) -> OutgoingMessageEnum {
+        OutgoingMessageEnum::DisseminationMessage(self.message)
     }
 
     fn member_size(&self, member: &Member) -> usize {

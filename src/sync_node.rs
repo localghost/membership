@@ -7,7 +7,7 @@ use crate::member::Id as MemberId;
 use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
-use crate::message_encoder::encode_message;
+use crate::message_encoder::{MessageEncoder, OutgoingMessageEnum};
 use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
@@ -130,7 +130,7 @@ impl SyncNode {
     }
 
     pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
-        assert_ne!(member, self.myself, "Can't join yourself");
+        assert_ne!(member, self.myself.address, "Can't join yourself");
 
         let poll = Poll::new().unwrap();
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
@@ -146,7 +146,9 @@ impl SyncNode {
             for event in events.iter() {
                 match event.token() {
                     Token(0) => {
-                        self.handle_protocol_event(&event);
+                        if let Err(e) = self.handle_protocol_event(&event) {
+                            warn!("Failed to process protocol event: {:?}", e);
+                        }
                     }
                     Token(1) => match self.receiver.try_recv() {
                         Ok(message) => {
@@ -245,14 +247,17 @@ impl SyncNode {
         .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
-    fn send_message(&mut self, target: &SocketAddr, message: &Message) {
+    fn send_message(&mut self, target: &SocketAddr, message: OutgoingMessageEnum) {
         debug!("{:?} <- {:?}", target, message);
         let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), target);
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
             // FIXME: the disseminated members should be updated only when Ack is received
-            self.alive_disseminated_members.update_members(message.count_alive());
+            //            if let OutgoingMessageEnum::DisseminationMessage(ref dissemination_message) = message {
+            //                self.alive_disseminated_members
+            //                    .update_members(dissemination_message.num_notifications());
+            //            }
         }
     }
 
@@ -362,7 +367,7 @@ impl SyncNode {
         sequence_number
     }
 
-    fn handle_protocol_event(&mut self, event: &Event) {
+    fn handle_protocol_event(&mut self, event: &Event) -> Result<()> {
         if event.readiness().is_readable() {
             if let Some(letter) = self.recv_letter() {
                 match letter.message {
@@ -376,36 +381,33 @@ impl SyncNode {
                 debug!("{:?}", request);
                 match request {
                     Request::Init(ref address) => {
-                        let message = encode_message(1024).message_type(MessageType::Ping);
-                        if let Err(e) = message {
-                            warn!("Failed to encode message type for initial ping request");
-                        }
-                        let message = message.unwrap().sequence_number(0);
-                        if let Err(e) = message {
-                            warn!("Failed to encode sequence number for initial ping request");
-                        }
-                        let message = message.unwrap().notifications(&[]);
-                        if let Err(e) = message {
-                            warn!("Failed to add notification to initial ping request");
-                        }
-                        let message = message.unwrap().build();
+                        let message = MessageEncoder::new(1024)
+                            .message_type(MessageType::Ping)?
+                            .sequence_number(0)?
+                            .encode();
                         self.send_message(address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ping(ref header) => {
-                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
-                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                        // as that may lead to late failure discovery
-                        message.with_members(
-                            &self
-                                .alive_disseminated_members
-                                .get_members()
-                                .filter(|&member| *member != header.target)
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        );
-                        self.send_message(&header.target, &message);
+                        let message = MessageEncoder::new(1024)
+                            .message_type(MessageType::Ping)?
+                            .sequence_number(0)?
+                            .notifications(&self.notifications)?
+                            .broadcast(&self.broadcast)?
+                            .encode();
+                        //                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
+                        //                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
+                        //                        // as that may lead to late failure discovery
+                        //                        message.with_members(
+                        //                            &self
+                        //                                .alive_disseminated_members
+                        //                                .get_members()
+                        //                                .filter(|&member| *member != header.target)
+                        //                                .cloned()
+                        //                                .collect::<Vec<_>>(),
+                        //                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
+                        //                        );
+                        self.send_message(&self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingIndirect(ref header) => {
@@ -475,6 +477,7 @@ impl SyncNode {
                 }
             }
         }
+        Ok(())
     }
 
     fn update_state(&mut self, message: &DisseminationMessage) {
