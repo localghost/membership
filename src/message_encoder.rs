@@ -7,7 +7,7 @@ use failure::format_err;
 use std::net::SocketAddr;
 
 #[derive(Debug)]
-struct PingRequestMessage {
+struct PingRequestMessageOut {
     buffer: Bytes,
 }
 
@@ -15,13 +15,13 @@ struct PingMessage {}
 struct AckMessage {}
 
 #[derive(Debug)]
-struct OutgoingMessage {
+struct DisseminationMessageOut {
     buffer: BytesMut,
     num_notifications: usize,
     num_broadcast: usize,
 }
 
-impl OutgoingMessage {
+impl DisseminationMessageOut {
     pub(crate) fn num_notifications(&self) -> usize {
         self.num_notifications
     }
@@ -32,21 +32,21 @@ impl OutgoingMessage {
 }
 
 #[derive(Debug)]
-pub(crate) enum OutgoingMessageEnum {
-    DisseminationMessage(OutgoingMessage),
-    PingRequestMessage(PingRequestMessage),
+pub(crate) enum OutgoingMessage {
+    DisseminationMessage(DisseminationMessageOut),
+    PingRequestMessage(PingRequestMessageOut),
 }
 
-impl OutgoingMessageEnum {
+impl OutgoingMessage {
     pub(crate) fn buffer(self) -> Bytes {
         match self {
-            OutgoingMessageEnum::DisseminationMessage(message) => message.buffer.freeze(),
-            OutgoingMessageEnum::PingRequestMessage(message) => message.buffer,
+            OutgoingMessage::DisseminationMessage(message) => message.buffer.freeze(),
+            OutgoingMessage::PingRequestMessage(message) => message.buffer,
         }
     }
 }
 
-fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> PingRequestMessage {
+fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> PingRequestMessageOut {
     let mut buffer = BytesMut::new();
     buffer.put_u8(0u8);
     buffer.put_u64_be(sequence_number);
@@ -59,7 +59,7 @@ fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> Ping
             unimplemented!();
         }
     };
-    PingRequestMessage {
+    PingRequestMessageOut {
         buffer: buffer.freeze(),
     }
 }
@@ -124,14 +124,14 @@ fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> Ping
 //    }
 //}
 
-pub(crate) struct MessageEncoder {
-    message: OutgoingMessage,
+pub(crate) struct DisseminationMessageEncoder {
+    message: DisseminationMessageOut,
 }
 
-impl MessageEncoder {
+impl DisseminationMessageEncoder {
     pub(crate) fn new(max_size: usize) -> Self {
-        MessageEncoder {
-            message: OutgoingMessage {
+        DisseminationMessageEncoder {
+            message: DisseminationMessageOut {
                 buffer: BytesMut::with_capacity(max_size),
                 num_notifications: 0,
                 num_broadcast: 0,
@@ -167,10 +167,6 @@ impl MessageEncoder {
             }
             Notification::Confirm { member } => {
                 self.message.buffer.put_u8(2);
-                self.encode_member(member)?;
-            }
-            Notification::Check { member } => {
-                self.message.buffer.put_u8(3);
                 self.encode_member(member)?;
             }
         }
@@ -224,8 +220,8 @@ impl MessageEncoder {
         Ok(self)
     }
 
-    pub(crate) fn encode(self) -> OutgoingMessageEnum {
-        OutgoingMessageEnum::DisseminationMessage(self.message)
+    pub(crate) fn encode(self) -> OutgoingMessage {
+        OutgoingMessage::DisseminationMessage(self.message)
     }
 
     fn member_size(&self, member: &Member) -> usize {

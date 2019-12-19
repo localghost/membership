@@ -1,13 +1,13 @@
 #![deny(missing_docs)]
 
 use crate::disseminated::Disseminated;
-use crate::incoming_message::{DisseminationMessage, IncomingMessage, PingRequestMessage};
+use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
 use crate::least_disseminated_members::DisseminatedMembers;
 use crate::member::Id as MemberId;
 use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
-use crate::message_encoder::{MessageEncoder, OutgoingMessageEnum};
+use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage};
 use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
@@ -247,7 +247,7 @@ impl SyncNode {
         .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
-    fn send_message(&mut self, target: &SocketAddr, message: OutgoingMessageEnum) {
+    fn send_message(&mut self, target: &SocketAddr, message: OutgoingMessage) {
         debug!("{:?} <- {:?}", target, message);
         let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), target);
         if let Err(e) = result {
@@ -381,7 +381,7 @@ impl SyncNode {
                 debug!("{:?}", request);
                 match request {
                     Request::Init(ref address) => {
-                        let message = MessageEncoder::new(1024)
+                        let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sequence_number(0)?
                             .encode();
@@ -389,7 +389,7 @@ impl SyncNode {
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ping(ref header) => {
-                        let message = MessageEncoder::new(1024)
+                        let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sequence_number(0)?
                             .notifications(&self.notifications)?
@@ -480,12 +480,12 @@ impl SyncNode {
         Ok(())
     }
 
-    fn update_state(&mut self, message: &DisseminationMessage) {
+    fn update_state(&mut self, message: &DisseminationMessageIn) {
         self.update_notifications(message.notifications.iter());
         self.update_members(message.broadcast.iter());
     }
 
-    fn handle_ack(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
+    fn handle_ack(&mut self, sender: &SocketAddr, message: &DisseminationMessageIn) {
         self.update_state(message);
         for ack in self.acks.drain(..).collect::<Vec<_>>() {
             match ack.request {
@@ -522,7 +522,7 @@ impl SyncNode {
         }
     }
 
-    fn handle_ping(&mut self, sender: &SocketAddr, message: &DisseminationMessage) {
+    fn handle_ping(&mut self, sender: &SocketAddr, message: &DisseminationMessageIn) {
         self.update_state(message);
         self.requests.push_back(Request::Ack(Header {
             target: *sender,
@@ -530,7 +530,7 @@ impl SyncNode {
         }));
     }
 
-    fn handle_indirect_ping(&mut self, sender: &SocketAddr, message: &PingRequestMessage) {
+    fn handle_indirect_ping(&mut self, sender: &SocketAddr, message: &PingRequestMessageIn) {
         self.requests.push_back(Request::PingProxy(
             Header {
                 target: message.target,

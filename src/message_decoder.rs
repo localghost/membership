@@ -1,4 +1,4 @@
-use crate::incoming_message::IncomingMessage;
+use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
 use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
@@ -23,20 +23,20 @@ impl<'a> MessageDecoder<'a> {
     fn decode_message(&mut self) -> Result<IncomingMessage> {
         let message_type = self.decode_message_type()?;
         let message = match message_type {
-            MessageType::Ping => IncomingMessage::Ping {
+            MessageType::Ping => IncomingMessage::Ping(DisseminationMessageIn {
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
-            },
-            MessageType::PingAck => IncomingMessage::Ack {
+            }),
+            MessageType::PingAck => IncomingMessage::Ack(DisseminationMessageIn {
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
-            },
-            MessageType::PingIndirect => IncomingMessage::PingRequestMessage {
+            }),
+            MessageType::PingIndirect => IncomingMessage::PingRequest(PingRequestMessageIn {
                 sequence_number: self.decode_sequence_number()?,
                 target: self.decode_target()?,
-            },
+            }),
         };
         Ok(message)
     }
