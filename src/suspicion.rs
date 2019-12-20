@@ -1,4 +1,4 @@
-use crate::member::Member;
+use crate::member::Member::Id as MemberId;
 use std::time::Instant;
 
 pub(crate) struct Suspicion {
@@ -8,7 +8,7 @@ pub(crate) struct Suspicion {
 }
 
 impl Suspicion {
-    pub(crate) fn new(member: Member) -> Self {
+    pub(crate) fn new(member_id: MemberId) -> Self {
         Suspicion {
             created: Instant::now(),
             member,

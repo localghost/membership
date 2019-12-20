@@ -201,9 +201,9 @@ impl SyncNode {
     }
 
     fn advance_epoch(&mut self) {
-        if let Some(member) = self.get_next_member() {
+        if let Some(member_id) = self.get_next_member() {
             let ping = Request::Ping(Header {
-                target: member,
+                member_id,
                 sequence_number: self.get_next_sequence_number(),
             });
             self.requests.push_front(ping);
@@ -320,8 +320,8 @@ impl SyncNode {
         self.update_members(std::iter::once(member));
     }
 
-    fn handle_suspect(&mut self, member: &Member) {
-        self.suspicions.push_back(Suspicion::new(member.id));
+    fn handle_suspect(&mut self, member_id: &MemberId) {
+        self.suspicions.push_back(Suspicion::new(member_id));
     }
 
     fn remove_members<T>(&mut self, members: T)
