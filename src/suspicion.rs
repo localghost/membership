@@ -1,17 +1,16 @@
-use crate::member::Member::Id as MemberId;
+use crate::member::Id as MemberId;
 use std::time::Instant;
 
 pub(crate) struct Suspicion {
     pub(crate) created: Instant,
-    // FIXME: Actually, only member id and incarnation number are needed.
-    pub(crate) member: Member,
+    pub(crate) member_id: MemberId,
 }
 
 impl Suspicion {
     pub(crate) fn new(member_id: MemberId) -> Self {
         Suspicion {
             created: Instant::now(),
-            member,
+            member_id,
         }
     }
 }

@@ -218,9 +218,8 @@ impl SyncNode {
                 self.requests.push_back(Request::PingIndirect(header));
             }
             Request::PingIndirect(header) | Request::PingProxy(header, ..) => {
-                // TODO: mark the member as suspected
                 self.handle_suspect(header.member_id);
-                self.kill_members(std::iter::once(header.target));
+                //                self.kill_members(std::iter::once(header.member_id));
             }
             _ => unreachable!(),
         }
@@ -258,16 +257,6 @@ impl SyncNode {
             //                self.alive_disseminated_members
             //                    .update_members(dissemination_message.num_notifications());
             //            }
-        }
-    }
-
-    fn send_message2(&mut self, target: &SocketAddr, buffer: &Bytes) {
-        let result = self.udp.as_ref().unwrap().send_to(&buffer, target);
-        if let Err(e) = result {
-            warn!("Message to {:?} was not delivered due to {:?}", target, e);
-        } else {
-            // FIXME: the disseminated members should be updated only when Ack is received
-            self.alive_disseminated_members.update_members(message.count_alive());
         }
     }
 
@@ -310,7 +299,7 @@ impl SyncNode {
             match notification {
                 Notification::Confirm { member } => self.remove_member(member),
                 Notification::Alive { member } => self.handle_alive(member),
-                Notification::Suspect { member } => self.handle_suspect(member),
+                Notification::Suspect { member } => self.handle_suspect(member.id),
             }
         }
         // TODO: merge notifications into existing ones
@@ -320,7 +309,7 @@ impl SyncNode {
         self.update_members(std::iter::once(member));
     }
 
-    fn handle_suspect(&mut self, member_id: &MemberId) {
+    fn handle_suspect(&mut self, member_id: MemberId) {
         self.suspicions.push_back(Suspicion::new(member_id));
     }
 

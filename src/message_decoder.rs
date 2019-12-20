@@ -1,10 +1,11 @@
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
-use crate::member::Member;
+use crate::member::{Id as MemberId, Member};
 use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
 use bytes::Buf;
 use failure::format_err;
+use std::convert::TryFrom;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -24,16 +25,19 @@ impl<'a> MessageDecoder<'a> {
         let message_type = self.decode_message_type()?;
         let message = match message_type {
             MessageType::Ping => IncomingMessage::Ping(DisseminationMessageIn {
+                sender: self.decode_sender()?,
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
             }),
             MessageType::PingAck => IncomingMessage::Ack(DisseminationMessageIn {
+                sender: self.decode_sender()?,
                 sequence_number: self.decode_sequence_number()?,
                 notifications: self.decode_notifications()?,
                 broadcast: self.decode_broadcast()?,
             }),
             MessageType::PingIndirect => IncomingMessage::PingRequest(PingRequestMessageIn {
+                sender: self.decode_sender()?,
                 sequence_number: self.decode_sequence_number()?,
                 target: self.decode_target()?,
             }),
@@ -93,21 +97,38 @@ impl<'a> MessageDecoder<'a> {
         Ok(notification)
     }
 
+    fn decode_sender(&mut self) -> Result<Member> {
+        if !self.buffer.has_remaining() {
+            return Err(format_err!("Could not decode sender"));
+        }
+        let header = self.buffer.get_u8();
+        self.decode_member(header >> 7)
+    }
+
     fn decode_member(&mut self, address_type: u8) -> Result<Member> {
+        let member_id = self.decode_member_id()?;
         let address = self.decode_address(address_type)?;
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
             return Err(format_err!("Could not decode member"));
         }
         Ok(Member {
+            id: member_id,
             address,
             incarnation: self.buffer.get_u64_be(),
         })
     }
 
+    fn decode_member_id(&mut self) -> Result<MemberId> {
+        if self.buffer.remaining() < std::mem::size_of::<MemberId>() {
+            return Err(format_err!("Could not decode member id"));
+        }
+        Ok(MemberId::try_from(&self.buffer.get_ref()[0..20])?)
+    }
+
     fn decode_address(&mut self, address_type: u8) -> Result<SocketAddr> {
         // FIXME: The first value should depend on the `address_type`.
         if self.buffer.remaining() < (std::mem::size_of::<u32>() + std::mem::size_of::<u16>()) {
-            return Err(format_err!("Could not decode member"));
+            return Err(format_err!("Could not decode member address"));
         }
         let address = match address_type {
             0 => SocketAddr::new(
