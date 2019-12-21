@@ -34,11 +34,11 @@ impl Member {
 //    }
 //}
 //
-//impl PartialEq for Member {
-//    fn eq(&self, other: &Self) -> bool {
-//        self.id == other.id && self.incarnation == other.incarnation
-//    }
-//}
+impl PartialEq for Member {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.incarnation == other.incarnation
+    }
+}
 
 fn generate_id(address: SocketAddr) -> Id {
     let mut hasher = Sha1::new();

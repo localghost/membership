@@ -102,6 +102,12 @@ impl<'a> MessageDecoder<'a> {
             return Err(format_err!("Could not decode sender"));
         }
         let header = self.buffer.get_u8();
+        // Member header:
+        // +----------------+
+        // [7][6|5|4|3|2|1|0]
+        // +----------------+
+        // 0-6: reserved
+        // 7: IP address type
         self.decode_member(header >> 7)
     }
 
@@ -165,7 +171,7 @@ impl<'a> MessageDecoder<'a> {
         Ok(result)
     }
 
-    fn decode_target(&mut self) -> Result<SocketAddr> {
+    fn decode_target(&mut self) -> Result<Member> {
         if !self.buffer.has_remaining() {
             return Err(format_err!("Could not decode ping request target"));
         }
@@ -176,7 +182,7 @@ impl<'a> MessageDecoder<'a> {
         // +----------------+
         // 0-6: reserved
         // 7: IP address type
-        self.decode_address(header >> 7)
+        self.decode_member(header >> 7)
     }
 }
 
@@ -198,11 +204,19 @@ mod test {
         buffer.put_i32_be(MessageType::Ping as i32);
         buffer.put_u64_be(42);
 
-        let message = decode_message(&buffer).unwrap();
-        assert_eq!(message.message_type, MessageType::Ping);
-        assert_eq!(message.sequence_number, 42);
-        assert!(message.notifications.is_empty());
-        assert!(message.broadcast.is_empty());
+        //        let message = ;
+        match decode_message(&buffer).unwrap() {
+            IncomingMessage::Ping(message) => assert_eq!(message.sequence_number, 42),
+            _ => assert!(false),
+        }
+        //        if let IncomingMessage::Ping(message) =  {
+        //        } else {
+        //            assert
+        //        }
+        //        assert_eq!(message.message_type, MessageType::Ping);
+        //        assert_eq!(message.sequence_number, 42);
+        //        assert!(message.notifications.is_empty());
+        //        assert!(message.broadcast.is_empty());
     }
 
     #[test]

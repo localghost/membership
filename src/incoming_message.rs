@@ -16,7 +16,7 @@ pub(crate) struct DisseminationMessageIn {
 pub(crate) struct PingRequestMessageIn {
     pub(crate) sender: Member,
     pub(crate) sequence_number: u64,
-    pub(crate) target: SocketAddr,
+    pub(crate) target: Member,
 }
 
 #[derive(Debug)]

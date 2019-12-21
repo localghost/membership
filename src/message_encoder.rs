@@ -181,7 +181,7 @@ impl DisseminationMessageEncoder {
         }
     }
 
-    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<Self> {
+    pub(crate) fn notifications<'a>(mut self, notifications: impl Iterator<Item = &'a Notification>) -> Result<Self> {
         if !self.message.buffer.has_remaining_mut() {
             return Err(format_err!("Not enough space to encode notifications"));
         }
@@ -201,7 +201,7 @@ impl DisseminationMessageEncoder {
         Ok(self)
     }
 
-    pub(crate) fn broadcast(mut self, members: &[Member]) -> Result<Self> {
+    pub(crate) fn broadcast<'a>(mut self, members: impl Iterator<Item = &'a Member>) -> Result<Self> {
         if !self.message.buffer.has_remaining_mut() {
             return Err(format_err!("Not enough space to encode broadcast"));
         }
