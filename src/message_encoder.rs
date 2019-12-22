@@ -46,11 +46,10 @@ impl OutgoingMessage {
     }
 }
 
-fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> PingRequestMessageOut {
-    let mut buffer = BytesMut::new();
-    buffer.put_u8(0u8);
-    buffer.put_u64_be(sequence_number);
-    match target {
+fn encode_member(member: &Member, buffer: &mut BytesMut) {
+    buffer.put_slice(&member.id);
+    buffer.put_u64_be(member.incarnation);
+    match member.address {
         SocketAddr::V4(address) => {
             buffer.put_slice(&address.ip().octets());
             buffer.put_u16_be(address.port());
@@ -59,6 +58,20 @@ fn encode_message_ping_request(sequence_number: u64, target: SocketAddr) -> Ping
             unimplemented!();
         }
     };
+}
+
+pub(crate) fn encode_message_ping_request(
+    sender: &Member,
+    sequence_number: u64,
+    target: &Member,
+) -> PingRequestMessageOut {
+    let mut buffer = BytesMut::new();
+    // TODO: Header should contain IP type for `sender` and `target`, and number of bytes for Memeber Id.
+    buffer.put_u8(0u8);
+    encode_member(sender, &mut buffer);
+    buffer.put_u64_be(sequence_number);
+    encode_member(target, &mut buffer);
+
     PingRequestMessageOut {
         buffer: buffer.freeze(),
     }

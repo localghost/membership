@@ -408,13 +408,10 @@ impl SyncNode {
                             .encode();
 
                         let indirect_members = self
-                            .alive_disseminated_members
-                            .get_members()
-                            // do not send the message to the member that is being suspected
-                            .filter(|&m| *m != header.target)
-                            .take(self.config.num_indirect as usize)
-                            .cloned()
-                            .collect::<Vec<_>>();
+                            .members
+                            .iter()
+                            .filter(|(&k, v)| k != header.member_id)
+                            .take(self.config.num_indirect as usize);
                         for member in indirect_members {
                             let mut message = Message::create(MessageType::PingIndirect, header.sequence_number);
                             // filter is needed to not include target node on the alive list as it is being suspected
