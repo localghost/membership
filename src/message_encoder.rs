@@ -66,14 +66,50 @@ pub(crate) fn encode_message_ping_request(
     target: &Member,
 ) -> PingRequestMessageOut {
     let mut buffer = BytesMut::new();
-    // TODO: Header should contain IP type for `sender` and `target`, and number of bytes for Memeber Id.
-    buffer.put_u8(0u8);
+    // TODO: Header should contain IP type for `sender` and `target`, and number of bytes for Member Id.
+    let mut header = 0u8;
+    if sender.address.is_ipv6() {
+        header |= 1u8 << 7;
+    }
+    if target.address.is_ipv6() {
+        header |= 1u8 << 6;
+    }
+    buffer.put_u8(header);
     encode_member(sender, &mut buffer);
     buffer.put_u64_be(sequence_number);
     encode_member(target, &mut buffer);
 
     PingRequestMessageOut {
         buffer: buffer.freeze(),
+    }
+}
+
+struct PingRequestMessageEncoder {
+    buffer: BytesMut,
+}
+
+impl PingRequestMessageEncoder {
+    pub(crate) fn new() -> Self {
+        // TODO: use `with_capacity()` instead as the size is known upfront
+        let mut encoder = PingRequestMessageEncoder {
+            buffer: BytesMut::new(),
+        };
+        encoder.buffer.put_u8(0u8);
+        encoder
+    }
+
+    pub(crate) fn sender(self, member: &Member) -> Result<Self> {
+        if member.address.is_ipv6() {
+            self.buffer[0] |= 1u8 << 7;
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn target(self, member: &Member) -> Result<Self> {
+        if member.address.is_ipv6() {
+            self.buffer[0] |= 1u8 << 6;
+        }
+        Ok(self)
     }
 }
 
