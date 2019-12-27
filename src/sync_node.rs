@@ -7,7 +7,7 @@ use crate::member::Id as MemberId;
 use crate::member::Member;
 use crate::message::{Message, MessageType};
 use crate::message_decoder::decode_message;
-use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage};
+use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
 use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
@@ -283,11 +283,15 @@ impl SyncNode {
 
     fn update_members<'a>(&mut self, members: impl Iterator<Item = &'a Member>) {
         for member in members {
-            if self.members.insert(member.id, *member).is_none() {
-                info!("Member joined: {:?}", member);
-                self.ping_order.push(member.id);
-                self.broadcast.add(member.id);
-            }
+            self.update_member(member);
+        }
+    }
+
+    fn update_member(&mut self, member: &Member) {
+        if self.members.insert(member.id, *member).is_none() {
+            info!("Member joined: {:?}", member);
+            self.ping_order.push(member.id);
+            self.broadcast.add(member.id);
         }
     }
 
@@ -400,34 +404,18 @@ impl SyncNode {
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingIndirect(ref header) => {
-                        let message = DisseminationMessageEncoder::new(1024)
-                            .message_type(MessageType::Ping)?
-                            .sequence_number(0)?
-                            .notifications(self.notifications.iter())?
-                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
-                            .encode();
-
                         let indirect_members = self
                             .members
                             .iter()
                             .filter(|(&k, v)| k != header.member_id)
+                            .map(|(_, v)| v)
                             .take(self.config.num_indirect as usize);
                         for member in indirect_members {
-                            let mut message = Message::create(MessageType::PingIndirect, header.sequence_number);
-                            // filter is needed to not include target node on the alive list as it is being suspected
-                            message.with_members(
-                                &std::iter::once(&header.target)
-                                    .chain(
-                                        self.alive_disseminated_members
-                                            .get_members()
-                                            .filter(|&m| *m != header.target),
-                                    )
-                                    .cloned()
-                                    .collect::<Vec<_>>(),
-                                &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                            );
-                            vec![].iter();
-                            self.send_message(&member, &message);
+                            let message = PingRequestMessageEncoder::new()
+                                .sender(&self.myself)?
+                                .target(member)?
+                                .encode();
+                            self.send_message(&member.address, message);
                         }
                         self.acks.push(Ack::new(request));
                     }
@@ -438,18 +426,7 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-
-                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
-                        message.with_members(
-                            &self
-                                .alive_disseminated_members
-                                .get_members()
-                                .filter(|&member| *member != header.target)
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        );
-                        self.send_message(&header.target, &message);
+                        self.send_message(&self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {
@@ -532,6 +509,8 @@ impl SyncNode {
     }
 
     fn handle_indirect_ping(&mut self, message: &PingRequestMessageIn) {
+        self.update_member(&message.sender);
+        self.update_member(&message.target);
         self.requests.push_back(Request::PingProxy(
             Header {
                 member_id: message.target.id,

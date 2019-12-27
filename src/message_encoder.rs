@@ -60,31 +60,31 @@ fn encode_member(member: &Member, buffer: &mut BytesMut) {
     };
 }
 
-pub(crate) fn encode_message_ping_request(
-    sender: &Member,
-    sequence_number: u64,
-    target: &Member,
-) -> PingRequestMessageOut {
-    let mut buffer = BytesMut::new();
-    // TODO: Header should contain IP type for `sender` and `target`, and number of bytes for Member Id.
-    let mut header = 0u8;
-    if sender.address.is_ipv6() {
-        header |= 1u8 << 7;
-    }
-    if target.address.is_ipv6() {
-        header |= 1u8 << 6;
-    }
-    buffer.put_u8(header);
-    encode_member(sender, &mut buffer);
-    buffer.put_u64_be(sequence_number);
-    encode_member(target, &mut buffer);
+//pub(crate) fn encode_message_ping_request(
+//    sender: &Member,
+//    sequence_number: u64,
+//    target: &Member,
+//) -> PingRequestMessageOut {
+//    let mut buffer = BytesMut::new();
+//    // TODO: Header should contain IP type for `sender` and `target`, and number of bytes for Member Id.
+//    let mut header = 0u8;
+//    if sender.address.is_ipv6() {
+//        header |= 1u8 << 7;
+//    }
+//    if target.address.is_ipv6() {
+//        header |= 1u8 << 6;
+//    }
+//    buffer.put_u8(header);
+//    encode_member(sender, &mut buffer);
+//    buffer.put_u64_be(sequence_number);
+//    encode_member(target, &mut buffer);
+//
+//    PingRequestMessageOut {
+//        buffer: buffer.freeze(),
+//    }
+//}
 
-    PingRequestMessageOut {
-        buffer: buffer.freeze(),
-    }
-}
-
-struct PingRequestMessageEncoder {
+pub(crate) struct PingRequestMessageEncoder {
     buffer: BytesMut,
 }
 
@@ -94,6 +94,7 @@ impl PingRequestMessageEncoder {
         let mut encoder = PingRequestMessageEncoder {
             buffer: BytesMut::new(),
         };
+        encoder.buffer.put_i32_be(MessageType::PingIndirect as i32);
         encoder.buffer.put_u8(0u8);
         encoder
     }
@@ -110,6 +111,12 @@ impl PingRequestMessageEncoder {
             self.buffer[0] |= 1u8 << 6;
         }
         Ok(self)
+    }
+
+    pub(crate) fn encode(self) -> OutgoingMessage {
+        OutgoingMessage::PingRequestMessage(PingRequestMessageOut {
+            buffer: self.buffer.freeze(),
+        })
     }
 }
 
