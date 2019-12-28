@@ -246,9 +246,9 @@ impl SyncNode {
         .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
-    fn send_message(&mut self, target: &SocketAddr, message: OutgoingMessage) {
+    fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
         debug!("{:?} <- {:?}", target, message);
-        let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), target);
+        let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), &target);
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
@@ -288,7 +288,7 @@ impl SyncNode {
     }
 
     fn update_member(&mut self, member: &Member) {
-        if self.members.insert(member.id, *member).is_none() {
+        if self.members.insert(member.id, member.clone()).is_none() {
             info!("Member joined: {:?}", member);
             self.ping_order.push(member.id);
             self.broadcast.add(member.id);
@@ -298,8 +298,10 @@ impl SyncNode {
     fn update_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) {
         // TODO: check this does not miss notifications with not yet seen members
         // TODO: remove from self.notifications those notifications that are overridden by the new ones
-        let notifications = notifications.filter(|n| self.notifications.iter().find(|n2| n2 >= n).is_none());
         for notification in notifications {
+            if self.notifications.iter().find(|&n| n >= notification).is_some() {
+                continue;
+            }
             match notification {
                 Notification::Confirm { member } => self.remove_member(member),
                 Notification::Alive { member } => self.handle_alive(member),
@@ -373,7 +375,7 @@ impl SyncNode {
             if let Some(request) = self.requests.pop_front() {
                 debug!("{:?}", request);
                 match request {
-                    Request::Init(ref address) => {
+                    Request::Init(address) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sequence_number(0)?
@@ -400,23 +402,25 @@ impl SyncNode {
                         //                                .collect::<Vec<_>>(),
                         //                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
                         //                        );
-                        self.send_message(&self.members[&header.member_id].address, message);
+                        self.send_message(self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingIndirect(ref header) => {
                         let indirect_members = self
                             .members
-                            .iter()
-                            .filter(|(&k, v)| k != header.member_id)
-                            .map(|(_, v)| v)
-                            .take(self.config.num_indirect as usize);
-                        for member in indirect_members {
+                            .keys()
+                            .filter(|&key| *key != header.member_id)
+                            .take(self.config.num_indirect as usize)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        indirect_members.iter().try_for_each(|member_id| -> Result<()> {
                             let message = PingRequestMessageEncoder::new()
                                 .sender(&self.myself)?
-                                .target(member)?
+                                .target(&self.members[member_id])?
                                 .encode();
-                            self.send_message(&member.address, message);
-                        }
+                            self.send_message(self.members[member_id].address, message);
+                            Ok(())
+                        })?;
                         self.acks.push(Ack::new(request));
                     }
                     Request::PingProxy(ref header, ..) => {
@@ -426,32 +430,34 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(&self.members[&header.member_id].address, message);
+                        self.send_message(self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ack(header) => {
-                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
-                        message.with_members(
-                            &self
-                                .alive_disseminated_members
-                                .get_members()
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        );
-                        self.send_message(&header.target, &message);
-                    }
-                    Request::AckIndirect(header, member) => {
-                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
-                        message.with_members(
-                            &std::iter::once(&member)
-                                .chain(self.alive_disseminated_members.get_members())
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        );
-                        self.send_message(&header.target, &message);
-                    }
+                    Request::Ack(header) | Request::AckIndirect(header, ..) => {
+                        let message = DisseminationMessageEncoder::new(1024)
+                            .message_type(MessageType::PingAck)?
+                            .sequence_number(header.sequence_number)?
+                            .notifications(self.notifications.iter())?
+                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
+                            .encode();
+                        self.send_message(self.members[&header.member_id].address, message);
+                    } //                    Request::AckIndirect(header, member) => {
+                      //                        let message = DisseminationMessageEncoder::new(1024)
+                      //                            .message_type(MessageType::PingAck)?
+                      //                            .sequence_number(header.sequence_number)?
+                      //                            .notifications(self.notifications.iter())?
+                      //                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
+                      //                            .encode();
+                      //                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
+                      //                        message.with_members(
+                      //                            &std::iter::once(&member)
+                      //                                .chain(self.alive_disseminated_members.get_members())
+                      //                                .cloned()
+                      //                                .collect::<Vec<_>>(),
+                      //                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
+                      //                        );
+                      //                        self.send_message(&header.target, &message);
+                      //                    }
                 }
             }
         }

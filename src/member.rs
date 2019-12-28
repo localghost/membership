@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type Incarnation = u64;
 pub(crate) type Id = [u8; 20];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Member {
     pub(crate) id: Id,
     pub(crate) address: SocketAddr,

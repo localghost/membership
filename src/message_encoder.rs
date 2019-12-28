@@ -7,7 +7,7 @@ use failure::format_err;
 use std::net::SocketAddr;
 
 #[derive(Debug)]
-struct PingRequestMessageOut {
+pub(crate) struct PingRequestMessageOut {
     buffer: Bytes,
 }
 
@@ -15,7 +15,7 @@ struct PingMessage {}
 struct AckMessage {}
 
 #[derive(Debug)]
-struct DisseminationMessageOut {
+pub(crate) struct DisseminationMessageOut {
     buffer: BytesMut,
     num_notifications: usize,
     num_broadcast: usize,
@@ -99,14 +99,14 @@ impl PingRequestMessageEncoder {
         encoder
     }
 
-    pub(crate) fn sender(self, member: &Member) -> Result<Self> {
+    pub(crate) fn sender(mut self, member: &Member) -> Result<Self> {
         if member.address.is_ipv6() {
             self.buffer[0] |= 1u8 << 7;
         }
         Ok(self)
     }
 
-    pub(crate) fn target(self, member: &Member) -> Result<Self> {
+    pub(crate) fn target(mut self, member: &Member) -> Result<Self> {
         if member.address.is_ipv6() {
             self.buffer[0] |= 1u8 << 6;
         }
