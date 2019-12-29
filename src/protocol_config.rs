@@ -26,6 +26,7 @@ impl Default for ProtocolConfig {
             protocol_period: 5,
             ack_timeout: 1,
             num_indirect: 3,
+            suspect_timeout: 10,
         }
     }
 }

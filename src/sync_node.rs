@@ -214,6 +214,16 @@ impl SyncNode {
         Ok(())
     }
 
+    fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
+        let confirm = Notification::Confirm {
+            member: self.members[&suspicion.member_id].clone(),
+        };
+        self.notifications.remove(&Notification::Suspect {
+            member: self.members[&suspicion.member_id].clone(),
+        });
+        self.notifications.add(confirm);
+    }
+
     fn advance_epoch(&mut self) {
         if let Some(member_id) = self.get_next_member() {
             let ping = Request::Ping(Header {
