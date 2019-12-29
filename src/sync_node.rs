@@ -190,18 +190,21 @@ impl SyncNode {
                 }
             }
 
+            let mut suspicions = Vec::new();
             loop {
                 match self.suspicions.front() {
                     Some(ref suspicion) => {
                         if now > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64)) {
-                            self.handle_timeout_suspicion(suspicion);
-                            let _ = self.suspicions.pop_front();
+                            suspicions.push(self.suspicions.pop_front().unwrap());
                         } else {
                             break;
                         }
                     }
                     None => break,
                 }
+            }
+            for suspicion in suspicions {
+                self.handle_timeout_suspicion(&suspicion);
             }
 
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {

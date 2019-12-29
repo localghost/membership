@@ -17,7 +17,7 @@ pub struct ProtocolConfig {
     pub num_indirect: u8,
 
     /// Number of seconds to keep member as suspected before removing it.
-    pub suspect_timeout: u8,
+    pub suspect_timeout: u64,
 }
 
 impl Default for ProtocolConfig {

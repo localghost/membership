@@ -35,6 +35,7 @@ impl From<ProtocolOptions> for ProtocolConfig {
             protocol_period: options.protocol_period,
             ack_timeout: options.ack_timeout,
             num_indirect: options.num_indirect,
+            suspect_timeout: options.protocol_period * 2,
         }
     }
 }
