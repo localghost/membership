@@ -38,10 +38,10 @@ pub(crate) enum OutgoingMessage {
 }
 
 impl OutgoingMessage {
-    pub(crate) fn buffer(self) -> Bytes {
+    pub(crate) fn buffer(&self) -> &[u8] {
         match self {
-            OutgoingMessage::DisseminationMessage(message) => message.buffer.freeze(),
-            OutgoingMessage::PingRequestMessage(message) => message.buffer,
+            OutgoingMessage::DisseminationMessage(ref message) => &message.buffer,
+            OutgoingMessage::PingRequestMessage(ref message) => &message.buffer,
         }
     }
 }
@@ -103,6 +103,7 @@ impl PingRequestMessageEncoder {
         if member.address.is_ipv6() {
             self.buffer[0] |= 1u8 << 7;
         }
+        encode_member(member, &mut self.buffer);
         Ok(self)
     }
 
@@ -110,6 +111,7 @@ impl PingRequestMessageEncoder {
         if member.address.is_ipv6() {
             self.buffer[0] |= 1u8 << 6;
         }
+        encode_member(member, &mut self.buffer);
         Ok(self)
     }
 

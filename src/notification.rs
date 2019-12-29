@@ -1,7 +1,7 @@
 use crate::member::Member;
 use failure::_core::cmp::Ordering;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Notification {
     Alive { member: Member },
     Suspect { member: Member },

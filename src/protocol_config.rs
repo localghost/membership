@@ -15,6 +15,9 @@ pub struct ProtocolConfig {
     /// When probed member does not respond in `ack_timeout`, `num_indirect` other members are asked to check
     /// the probed member.
     pub num_indirect: u8,
+
+    /// Number of seconds to keep member as suspected before removing it.
+    pub suspect_timeout: u8,
 }
 
 impl Default for ProtocolConfig {

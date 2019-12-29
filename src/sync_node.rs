@@ -190,6 +190,20 @@ impl SyncNode {
                 }
             }
 
+            loop {
+                match self.suspicions.front() {
+                    Some(ref suspicion) => {
+                        if now > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64)) {
+                            self.handle_timeout_suspicion(suspicion);
+                            let _ = self.suspicions.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 //                self.show_metrics();
                 self.advance_epoch();
@@ -234,29 +248,28 @@ impl SyncNode {
             Ready::readable() | Ready::writable(),
             PollOpt::level(),
         )
-        .map_err(|e| format_err!("Failed to register UDP socket for polling: {:?}", e))?;
+        .map_err(|e| format_err!("Failed to register UDP socket for polling: {:?}", e))
 
-        self.tcp = Some(TcpListener::bind(&self.myself.address).context("Failed to bind TCP socket")?);
-        poll.register(
-            self.tcp.as_ref().unwrap(),
-            Token(100),
-            Ready::readable() | Ready::writable(),
-            PollOpt::level(),
-        )
-        .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
+        //        self.tcp = Some(TcpListener::bind(&self.myself.address).context("Failed to bind TCP socket")?);
+        //        poll.register(
+        //            self.tcp.as_ref().unwrap(),
+        //            Token(100),
+        //            Ready::readable() | Ready::writable(),
+        //            PollOpt::level(),
+        //        )
+        //        .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
         debug!("{:?} <- {:?}", target, message);
-        let result = self.udp.as_ref().unwrap().send_to(&message.buffer(), &target);
+        let result = self.udp.as_ref().unwrap().send_to(message.buffer(), &target);
         if let Err(e) = result {
             warn!("Message to {:?} was not delivered due to {:?}", target, e);
         } else {
-            // FIXME: the disseminated members should be updated only when Ack is received
-            //            if let OutgoingMessageEnum::DisseminationMessage(ref dissemination_message) = message {
-            //                self.alive_disseminated_members
-            //                    .update_members(dissemination_message.num_notifications());
-            //            }
+            if let OutgoingMessage::DisseminationMessage(ref dissemination_message) = message {
+                self.notifications.mark(dissemination_message.num_notifications());
+                self.broadcast.mark(dissemination_message.num_broadcast());
+            }
         }
     }
 
@@ -307,16 +320,28 @@ impl SyncNode {
                 Notification::Alive { member } => self.handle_alive(member),
                 Notification::Suspect { member } => self.handle_suspect(member.id),
             }
+            self.notifications.add((*notification).clone());
+            let obsolete_notifications = self
+                .notifications
+                .iter()
+                .filter(|&n| n < notification)
+                .cloned()
+                .collect::<Vec<_>>();
+            for n in obsolete_notifications {
+                self.notifications.remove(&n);
+            }
         }
-        // TODO: merge notifications into existing ones
     }
 
     fn handle_alive(&mut self, member: &Member) {
-        self.update_members(std::iter::once(member));
+        self.update_member(member);
     }
 
     fn handle_suspect(&mut self, member_id: MemberId) {
         self.suspicions.push_back(Suspicion::new(member_id));
+        self.notifications.add(Notification::Suspect {
+            member: self.members[&member_id].clone(),
+        });
     }
 
     fn remove_members<T>(&mut self, members: T)
