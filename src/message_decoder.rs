@@ -81,13 +81,12 @@ impl<'a> MessageDecoder<'a> {
         }
         // Notification header:
         // +-----------------+
-        // [7][6|5|4][3|2|1|0]
+        // [7|6|5|4][3|2|1|0]
         // +-----------------+
         // 0-3: notification type
-        // 4-6: reserved
-        // 7: IP address type
+        // 4-7: reserved
         let header = self.buffer.get_u8();
-        let member = self.decode_member(header >> 7)?;
+        let member = self.decode_member()?;
         let notification = match header & 0x0f {
             0 => Notification::Alive { member },
             1 => Notification::Suspect { member },
@@ -101,17 +100,11 @@ impl<'a> MessageDecoder<'a> {
         if !self.buffer.has_remaining() {
             return Err(format_err!("Could not decode sender"));
         }
-        let header = self.buffer.get_u8();
-        // Member header:
-        // +----------------+
-        // [7][6|5|4|3|2|1|0]
-        // +----------------+
-        // 0-6: reserved
-        // 7: IP address type
-        self.decode_member(header >> 7)
+        self.decode_member()
     }
 
-    fn decode_member(&mut self, address_type: u8) -> Result<Member> {
+    fn decode_member(&mut self) -> Result<Member> {
+        let address_type = self.buffer.get_u8();
         let member_id = self.decode_member_id()?;
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
             return Err(format_err!("Could not decode member"));
@@ -129,7 +122,12 @@ impl<'a> MessageDecoder<'a> {
         if self.buffer.remaining() < std::mem::size_of::<MemberId>() {
             return Err(format_err!("Could not decode member id"));
         }
-        Ok(MemberId::try_from(&self.buffer.get_ref()[0..20])?)
+        let member_id = MemberId::try_from(
+            &self.buffer.get_ref()
+                [self.buffer.position() as usize..(self.buffer.position() as usize + std::mem::size_of::<MemberId>())],
+        )?;
+        self.buffer.advance(std::mem::size_of::<MemberId>());
+        Ok(member_id)
     }
 
     fn decode_address(&mut self, address_type: u8) -> Result<SocketAddr> {
@@ -160,14 +158,7 @@ impl<'a> MessageDecoder<'a> {
         let count = self.buffer.get_u8();
         let mut result = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            // Member header:
-            // +----------------+
-            // [7][6|5|4|3|2|1|0]
-            // +----------------+
-            // 0-6: reserved
-            // 7: IP address type
-            let header = self.buffer.get_u8();
-            result.push(self.decode_member(header >> 7)?);
+            result.push(self.decode_member()?);
         }
         Ok(result)
     }
@@ -176,14 +167,7 @@ impl<'a> MessageDecoder<'a> {
         if !self.buffer.has_remaining() {
             return Err(format_err!("Could not decode ping request target"));
         }
-        let header = self.buffer.get_u8();
-        // Target header:
-        // +----------------+
-        // [7][6|5|4|3|2|1|0]
-        // +----------------+
-        // 0-6: reserved
-        // 7: IP address type
-        self.decode_member(header >> 7)
+        self.decode_member()
     }
 }
 
@@ -256,17 +240,34 @@ mod test {
     fn decode_encoded_message() -> Result<()> {
         use crate::message_encoder::DisseminationMessageEncoder;
 
-        let member = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
+        let sender = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
+        let notifications = vec![
+            Notification::Alive {
+                member: Member::new(SocketAddr::from_str("127.0.1.1:5432")?),
+            },
+            Notification::Suspect {
+                member: Member::new(SocketAddr::from_str("127.0.1.2:5432")?),
+            },
+        ];
+        let broadcast = vec![
+            Member::new(SocketAddr::from_str("127.0.1.1:5432")?),
+            Member::new(SocketAddr::from_str("127.0.1.2:5432")?),
+        ];
         let encoded_message = DisseminationMessageEncoder::new(1024)
             .message_type(MessageType::Ping)?
-            .sender(&member)?
+            .sender(&sender)?
             .sequence_number(24)?
+            .notifications(notifications.iter())?
+            .broadcast(broadcast.iter())?
             .encode();
 
         let decoded_message = decode_message(encoded_message.buffer())?;
 
         if let IncomingMessage::Ping(ping_message) = decoded_message {
-            assert_eq!(ping_message.sequence_number, 24)
+            assert_eq!(ping_message.sender, sender);
+            assert_eq!(ping_message.sequence_number, 24);
+            assert_eq!(ping_message.notifications, notifications);
+            assert_eq!(ping_message.broadcast, broadcast);
         } else {
             assert!(false, "Not a Ping message");
         }

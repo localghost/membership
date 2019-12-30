@@ -249,11 +249,11 @@ impl DisseminationMessageEncoder {
             return Err(format_err!("Not enough space to encode notifications"));
         }
         let count_position = self.message.buffer.len();
-        self.message.buffer.resize(self.message.buffer.len() + 1, 0u8);
+        self.message.buffer.put_u8(0);
+        //        self.message.buffer.resize(self.message.buffer.len() + 1, 0u8);
         let mut count = 0;
         for notification in notifications {
-            // -1 so that there is space for broadcast header
-            if self.notification_size(notification) > (self.message.buffer.remaining_mut() - 1) {
+            if self.notification_size(notification) > self.message.buffer.remaining_mut() {
                 break;
             }
             self.encode_notification(notification)?;
