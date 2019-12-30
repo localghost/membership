@@ -5,8 +5,8 @@ use structopt::StructOpt;
 
 #[derive(StructOpt)]
 struct Options {
-    #[structopt(short = "j", long = "join-address", default_value = "127.0.0.1:2345")]
-    join_address: SocketAddr,
+    #[structopt(short = "j", long = "join-address")]
+    join_address: Option<SocketAddr>,
 
     #[structopt(short = "b", long = "bind-address", default_value = "127.0.0.1:2345")]
     bind_address: SocketAddr,
@@ -44,6 +44,9 @@ fn main() -> Result<(), Error> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Options::from_args();
     let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));
-    membership.join(config.join_address)?;
+    match config.join_address {
+        Some(address) => membership.join(address),
+        None => membership.start(),
+    }?;
     membership.wait()
 }

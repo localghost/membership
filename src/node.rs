@@ -36,7 +36,7 @@ impl Node {
     /// Member might not be instantly spotted by all other members of the group.
     pub fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.bind_address, "Can't join yourself");
-        assert!(self.handle.is_none(), "You have already joined");
+        assert!(self.handle.is_none(), "You have already started");
 
         let (mut sync_node, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
         self.sender = Some(sender);
@@ -44,6 +44,20 @@ impl Node {
             std::thread::Builder::new()
                 .name("membership".to_string())
                 .spawn(move || sync_node.join(member))?,
+        );
+        Ok(())
+    }
+
+    /// Starts new group.
+    pub fn start(&mut self) -> Result<()> {
+        assert!(self.handle.is_none(), "You have already started");
+
+        let (mut sync_node, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
+        self.sender = Some(sender);
+        self.handle = Some(
+            std::thread::Builder::new()
+                .name("membership".to_string())
+                .spawn(move || sync_node.start())?,
         );
         Ok(())
     }

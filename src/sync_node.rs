@@ -129,17 +129,13 @@ impl SyncNode {
         (gossip, sender)
     }
 
-    pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
-        assert_ne!(member, self.myself.address, "Can't join yourself");
-
+    pub(crate) fn start(&mut self) -> Result<()> {
         let poll = Poll::new().unwrap();
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
         self.bind(&poll)?;
 
         let mut events = Events::with_capacity(1024);
         let mut last_epoch_time = std::time::Instant::now();
-
-        self.requests.push_front(Request::Init(member));
 
         'mainloop: loop {
             poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
@@ -184,7 +180,7 @@ impl SyncNode {
 
             for ack in self.acks.drain(..).collect::<Vec<_>>() {
                 if now > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
-                    self.handle_timeout_ack(ack);
+                    self.handle_timeout_ack(ack)?;
                 } else {
                     self.acks.push(ack);
                 }
@@ -217,6 +213,12 @@ impl SyncNode {
         Ok(())
     }
 
+    pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
+        assert_ne!(member, self.myself.address, "Can't join yourself");
+        self.requests.push_front(Request::Init(member));
+        self.start()
+    }
+
     fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
         let confirm = Notification::Confirm {
             member: self.members[&suspicion.member_id].clone(),
@@ -239,8 +241,11 @@ impl SyncNode {
         info!("New epoch: {}", self.epoch);
     }
 
-    fn handle_timeout_ack(&mut self, ack: Ack) {
+    fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
         match ack.request {
+            Request::Init(address) => {
+                return Err(format_err!("Failed to join {}", address));
+            }
             Request::Ping(header) => {
                 self.requests.push_back(Request::PingIndirect(header));
             }
@@ -250,6 +255,7 @@ impl SyncNode {
             }
             _ => unreachable!(),
         }
+        Ok(())
     }
 
     fn bind(&mut self, poll: &Poll) -> Result<()> {

@@ -221,7 +221,7 @@ impl DisseminationMessageEncoder {
             }
             Notification::Suspect { member } => {
                 self.message.buffer.put_u8(1);
-                self.encode_member(member);
+                self.encode_member(member)?;
             }
             Notification::Confirm { member } => {
                 self.message.buffer.put_u8(2);
