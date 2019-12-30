@@ -118,7 +118,7 @@ impl SyncNode {
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
-            recv_buffer: Vec::with_capacity(1500),
+            recv_buffer: vec![0u8; 1500],
             myself: Member::new(bind_address),
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
@@ -281,13 +281,14 @@ impl SyncNode {
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
         debug!("{:?} <- {:?}", target, message);
-        let result = self.udp.as_ref().unwrap().send_to(message.buffer(), &target);
-        if let Err(e) = result {
-            warn!("Message to {:?} was not delivered due to {:?}", target, e);
-        } else {
-            if let OutgoingMessage::DisseminationMessage(ref dissemination_message) = message {
-                self.notifications.mark(dissemination_message.num_notifications());
-                self.broadcast.mark(dissemination_message.num_broadcast());
+        match self.udp.as_ref().unwrap().send_to(message.buffer(), &target) {
+            Err(e) => warn!("Message to {:?} was not delivered due to {:?}", target, e),
+            Ok(count) => {
+                debug!("Send {} bytes", count);
+                if let OutgoingMessage::DisseminationMessage(ref dissemination_message) = message {
+                    self.notifications.mark(dissemination_message.num_notifications());
+                    self.broadcast.mark(dissemination_message.num_broadcast());
+                }
             }
         }
     }
@@ -295,6 +296,7 @@ impl SyncNode {
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
         match self.udp.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
             Ok((count, sender)) => {
+                debug!("Received {} bytes from {:?}", count, sender);
                 let message = match decode_message(&self.recv_buffer[..count]) {
                     Ok(message) => message,
                     Err(e) => {
