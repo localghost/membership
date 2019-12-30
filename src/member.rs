@@ -2,11 +2,18 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use sha1::{Digest, Sha1};
 //use std::cmp::Ordering;
+use failure::_core::fmt::{Error, Formatter};
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Incarnation = u64;
 pub(crate) type Id = [u8; 20];
+
+//impl std::fmt::Display for Id {
+//    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+//        write!(f, self.iter().map(|b| format!("{}", 1)).fold(String::new()))
+//    }
+//}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Member {

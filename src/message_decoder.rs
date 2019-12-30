@@ -113,14 +113,15 @@ impl<'a> MessageDecoder<'a> {
 
     fn decode_member(&mut self, address_type: u8) -> Result<Member> {
         let member_id = self.decode_member_id()?;
-        let address = self.decode_address(address_type)?;
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
             return Err(format_err!("Could not decode member"));
         }
+        let incarnation = self.buffer.get_u64_be();
+        let address = self.decode_address(address_type)?;
         Ok(Member {
             id: member_id,
             address,
-            incarnation: self.buffer.get_u64_be(),
+            incarnation,
         })
     }
 
@@ -198,56 +199,78 @@ mod test {
     use bytes::{BufMut, BytesMut};
     use std::str::FromStr;
 
+    //    #[test]
+    //    fn decode_empty_message() {
+    //        let mut buffer = BytesMut::new();
+    //        buffer.put_i32_be(MessageType::Ping as i32);
+    //        buffer.put_u64_be(42);
+    //
+    //        //        let message = ;
+    //        match decode_message(&buffer).unwrap() {
+    //            IncomingMessage::Ping(message) => assert_eq!(message.sequence_number, 42),
+    //            _ => assert!(false),
+    //        }
+    //        //        if let IncomingMessage::Ping(message) =  {
+    //        //        } else {
+    //        //            assert
+    //        //        }
+    //        //        assert_eq!(message.message_type, MessageType::Ping);
+    //        //        assert_eq!(message.sequence_number, 42);
+    //        //        assert!(message.notifications.is_empty());
+    //        //        assert!(message.broadcast.is_empty());
+    //    }
+    //
+    //    #[test]
+    //    fn decode_message_with_notifications() {
+    //        let mut buffer = BytesMut::new();
+    //        buffer.put_i32_be(MessageType::Ping as i32);
+    //        buffer.put_u64_be(42);
+    //        buffer.put_u8(1);
+    //        buffer.put_u8(0);
+    //        buffer.put_slice(&Ipv4Addr::from_str("127.0.0.1").unwrap().octets());
+    //        buffer.put_u16_be(4567);
+    //        buffer.put_u64_be(123);
+    //
+    //        let message = decode_message(&buffer).unwrap();
+    //        assert_eq!(message.message_type, MessageType::Ping);
+    //        assert_eq!(message.sequence_number, 42);
+    //        assert!(message.broadcast.is_empty());
+    //        assert_eq!(1, message.notifications.len());
+    //
+    //        let notification = message.notifications.get(0).unwrap();
+    //        if let Notification::Alive { member } = notification {
+    //            assert!(member.address.is_ipv4());
+    //            assert_eq!("127.0.0.1:4567", member.address.to_string());
+    //            assert_eq!(123, member.incarnation);
+    //        } else {
+    //            assert!(false, "Not an Alive notification.");
+    //        }
+    //    }
+    //
+    //    #[test]
+    //    fn decode_message_with_broadcast() {
+    //        // TODO
+    //    }
+
     #[test]
-    fn decode_empty_message() {
-        let mut buffer = BytesMut::new();
-        buffer.put_i32_be(MessageType::Ping as i32);
-        buffer.put_u64_be(42);
+    fn decode_encoded_message() -> Result<()> {
+        use crate::message_encoder::DisseminationMessageEncoder;
 
-        //        let message = ;
-        match decode_message(&buffer).unwrap() {
-            IncomingMessage::Ping(message) => assert_eq!(message.sequence_number, 42),
-            _ => assert!(false),
-        }
-        //        if let IncomingMessage::Ping(message) =  {
-        //        } else {
-        //            assert
-        //        }
-        //        assert_eq!(message.message_type, MessageType::Ping);
-        //        assert_eq!(message.sequence_number, 42);
-        //        assert!(message.notifications.is_empty());
-        //        assert!(message.broadcast.is_empty());
-    }
+        let member = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
+        let encoded_message = DisseminationMessageEncoder::new(1024)
+            .message_type(MessageType::Ping)?
+            .sender(&member)?
+            .sequence_number(24)?
+            .encode();
 
-    #[test]
-    fn decode_message_with_notifications() {
-        let mut buffer = BytesMut::new();
-        buffer.put_i32_be(MessageType::Ping as i32);
-        buffer.put_u64_be(42);
-        buffer.put_u8(1);
-        buffer.put_u8(0);
-        buffer.put_slice(&Ipv4Addr::from_str("127.0.0.1").unwrap().octets());
-        buffer.put_u16_be(4567);
-        buffer.put_u64_be(123);
+        let decoded_message = decode_message(encoded_message.buffer())?;
 
-        let message = decode_message(&buffer).unwrap();
-        assert_eq!(message.message_type, MessageType::Ping);
-        assert_eq!(message.sequence_number, 42);
-        assert!(message.broadcast.is_empty());
-        assert_eq!(1, message.notifications.len());
-
-        let notification = message.notifications.get(0).unwrap();
-        if let Notification::Alive { member } = notification {
-            assert!(member.address.is_ipv4());
-            assert_eq!("127.0.0.1:4567", member.address.to_string());
-            assert_eq!(123, member.incarnation);
+        if let IncomingMessage::Ping(ping_message) = decoded_message {
+            assert_eq!(ping_message.sequence_number, 24)
         } else {
-            assert!(false, "Not an Alive notification.");
+            assert!(false, "Not a Ping message");
         }
-    }
 
-    #[test]
-    fn decode_message_with_broadcast() {
-        // TODO
+        Ok(())
     }
 }

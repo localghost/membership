@@ -197,6 +197,11 @@ impl DisseminationMessageEncoder {
         }
     }
 
+    pub(crate) fn sender(mut self, member: &Member) -> Result<Self> {
+        self.encode_member(member)?;
+        Ok(self)
+    }
+
     pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<Self> {
         if self.message.buffer.remaining_mut() < std::mem::size_of::<i32>() {
             return Err(format_err!("Could not encode message type"));
@@ -206,7 +211,7 @@ impl DisseminationMessageEncoder {
     }
 
     pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<Self> {
-        if self.message.buffer.remaining_mut() < std::mem::size_of::<i32>() {
+        if self.message.buffer.remaining_mut() < std::mem::size_of_val(&sequence_number) {
             return Err(format_err!("Could not encode sequence number"));
         }
         self.message.buffer.put_u64_be(sequence_number);
@@ -292,12 +297,17 @@ impl DisseminationMessageEncoder {
     }
 
     fn encode_member(&mut self, member: &Member) -> Result<()> {
+        let position = self.message.buffer.len();
+        self.message.buffer.put_u8(0u8);
+        self.message.buffer.put_slice(&member.id);
+        self.message.buffer.put_u64_be(member.incarnation);
         match member.address {
             SocketAddr::V4(address) => {
                 self.message.buffer.put_slice(&address.ip().octets());
                 self.message.buffer.put_u16_be(address.port());
             }
-            SocketAddr::V6(address) => {
+            SocketAddr::V6(_) => {
+                self.message.buffer[position] = 1u8 << 7;
                 unimplemented!();
             }
         }

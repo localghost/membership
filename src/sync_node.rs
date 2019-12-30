@@ -357,6 +357,7 @@ impl SyncNode {
     }
 
     fn handle_suspect(&mut self, member_id: MemberId) {
+        info!("Start suspecting member {:?}", member_id);
         self.suspicions.push_back(Suspicion::new(member_id));
         self.notifications.add(Notification::Suspect {
             member: self.members[&member_id].clone(),
@@ -422,6 +423,7 @@ impl SyncNode {
                     Request::Init(address) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
+                            .sender(&self.myself)?
                             .sequence_number(0)?
                             .encode();
                         self.send_message(address, message);
@@ -430,6 +432,7 @@ impl SyncNode {
                     Request::Ping(ref header) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
+                            .sender(&self.myself)?
                             .sequence_number(0)?
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
@@ -470,6 +473,7 @@ impl SyncNode {
                     Request::PingProxy(ref header, ..) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
+                            .sender(&self.myself)?
                             .sequence_number(0)?
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
@@ -480,6 +484,7 @@ impl SyncNode {
                     Request::Ack(header) | Request::AckIndirect(header, ..) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
+                            .sender(&self.myself)?
                             .sequence_number(header.sequence_number)?
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
