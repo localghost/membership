@@ -47,6 +47,8 @@ impl OutgoingMessage {
 }
 
 fn encode_member(member: &Member, buffer: &mut BytesMut) {
+    let position = buffer.len();
+    buffer.put_u8(0u8);
     buffer.put_slice(&member.id);
     buffer.put_u64_be(member.incarnation);
     match member.address {
@@ -55,7 +57,8 @@ fn encode_member(member: &Member, buffer: &mut BytesMut) {
             buffer.put_u16_be(address.port());
         }
         SocketAddr::V6(address) => {
-            unimplemented!();
+            buffer[position] = 1u8 << 7;
+            todo!();
         }
     };
 }
@@ -90,27 +93,25 @@ pub(crate) struct PingRequestMessageEncoder {
 
 impl PingRequestMessageEncoder {
     pub(crate) fn new() -> Self {
-        // TODO: use `with_capacity()` instead as the size is known upfront
+        // TODO: calculate exact max length as capacity
         let mut encoder = PingRequestMessageEncoder {
-            buffer: BytesMut::new(),
+            buffer: BytesMut::with_capacity(1024),
         };
         encoder.buffer.put_i32_be(MessageType::PingIndirect as i32);
-        encoder.buffer.put_u8(0u8);
         encoder
     }
 
     pub(crate) fn sender(mut self, member: &Member) -> Result<Self> {
-        if member.address.is_ipv6() {
-            self.buffer[0] |= 1u8 << 7;
-        }
         encode_member(member, &mut self.buffer);
         Ok(self)
     }
 
+    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<Self> {
+        self.buffer.put_u64_be(sequence_number);
+        Ok(self)
+    }
+
     pub(crate) fn target(mut self, member: &Member) -> Result<Self> {
-        if member.address.is_ipv6() {
-            self.buffer[0] |= 1u8 << 6;
-        }
         encode_member(member, &mut self.buffer);
         Ok(self)
     }

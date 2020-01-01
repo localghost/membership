@@ -237,7 +237,7 @@ mod test {
     //    }
 
     #[test]
-    fn decode_encoded_message() -> Result<()> {
+    fn decode_encoded_dissemination_message() -> Result<()> {
         use crate::message_encoder::DisseminationMessageEncoder;
 
         let sender = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
@@ -268,6 +268,30 @@ mod test {
             assert_eq!(ping_message.sequence_number, 24);
             assert_eq!(ping_message.notifications, notifications);
             assert_eq!(ping_message.broadcast, broadcast);
+        } else {
+            assert!(false, "Not a Ping message");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_encoded_ping_request_message() -> Result<()> {
+        use crate::message_encoder::PingRequestMessageEncoder;
+
+        let sender = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
+        let target = Member::new(SocketAddr::from_str("127.0.1.1:5432")?);
+        let encoded_message = PingRequestMessageEncoder::new()
+            .sender(&sender)?
+            .sequence_number(42)?
+            .target(&target)?
+            .encode();
+
+        let decoded_message = decode_message(encoded_message.buffer())?;
+
+        if let IncomingMessage::PingRequest(ping_request_message) = decoded_message {
+            assert_eq!(ping_request_message.sender, sender);
+            assert_eq!(ping_request_message.target, target);
         } else {
             assert!(false, "Not a Ping message");
         }

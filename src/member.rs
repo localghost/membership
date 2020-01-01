@@ -15,6 +15,13 @@ pub(crate) type Id = [u8; 20];
 //    }
 //}
 
+pub(crate) fn print_member_id(member_id: &Id) -> String {
+    member_id
+        .iter()
+        .map(|b| format!("{:x}", b))
+        .fold(String::new(), |acc, val| acc + &val)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Member {
     pub(crate) id: Id,

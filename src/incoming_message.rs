@@ -2,7 +2,6 @@
 
 use crate::member::Member;
 use crate::notification::Notification;
-use std::net::SocketAddr;
 
 #[derive(Debug)]
 pub(crate) struct DisseminationMessageIn {
