@@ -5,7 +5,8 @@ use std::fmt;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-#[derive(Debug, PartialEq)]
+// TODO: change repr to u8
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub(super) enum MessageType {
     Ping,
     PingAck,
@@ -17,13 +18,12 @@ pub(super) struct Message {
 }
 
 impl Message {
-    pub(super) fn create(message_type: MessageType, sequence_number: u64, epoch: u64) -> Self {
+    pub(super) fn create(message_type: MessageType, sequence_number: u64) -> Self {
         let mut message = Message {
             buffer: BytesMut::with_capacity(64),
         };
         message.buffer.put_i32_be(message_type as i32);
         message.buffer.put_u64_be(sequence_number);
-        message.buffer.put_u64_be(epoch);
         message
     }
 
@@ -78,18 +78,12 @@ impl Message {
             .get_u64_be()
     }
 
-    pub(super) fn get_epoch(&self) -> u64 {
-        self.get_cursor_into_buffer((std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64)
-            .unwrap()
-            .get_u64_be()
-    }
-
     pub(super) fn get_alive_members(&self) -> Vec<SocketAddr> {
-        self.get_members((std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64)
+        self.get_members((std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64)
     }
 
     pub(super) fn get_dead_members(&self) -> Vec<SocketAddr> {
-        let alive_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64;
+        let alive_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64;
         let position = alive_position + std::mem::size_of::<u8>() as u64 + self.count_members_bytes(alive_position);
         self.get_members(position)
     }
@@ -138,7 +132,7 @@ impl Message {
     }
 
     pub(crate) fn count_alive(&self) -> usize {
-        let alive_header_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>() * 2) as u64;
+        let alive_header_position = (std::mem::size_of::<i32>() + std::mem::size_of::<u64>()) as u64;
         let cursor = self.get_cursor_into_buffer(alive_header_position);
         if cursor.is_none() {
             return 0;
@@ -171,9 +165,8 @@ impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Message {{ type: {:?}, epoch: {}, sequence_number: {}, alive: {:?}, dead: {:?} }}",
+            "Message {{ type: {:?}, sequence_number: {}, alive: {:?}, dead: {:?} }}",
             self.get_type(),
-            self.get_epoch(),
             self.get_sequence_number(),
             self.get_alive_members(),
             self.get_dead_members()
@@ -189,10 +182,9 @@ mod test {
 
     #[test]
     fn create_message() {
-        let message = Message::create(MessageType::Ping, 1, 2);
+        let message = Message::create(MessageType::Ping, 1);
         assert_eq!(message.get_type(), MessageType::Ping);
         assert_eq!(message.get_sequence_number(), 1);
-        assert_eq!(message.get_epoch(), 2);
         assert_eq!(message.get_alive_members(), []);
         assert_eq!(message.get_dead_members(), []);
         assert_eq!(message.count_alive(), 0);
@@ -200,7 +192,7 @@ mod test {
 
     #[test]
     fn count_alive() {
-        let mut message = Message::create(MessageType::Ping, 1, 2);
+        let mut message = Message::create(MessageType::Ping, 1);
 
         message.with_members(
             &[
@@ -214,7 +206,7 @@ mod test {
 
     #[test]
     fn add_members() {
-        let mut message = Message::create(MessageType::Ping, 1, 2);
+        let mut message = Message::create(MessageType::Ping, 1);
 
         message.with_members(&[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())], &[]);
         assert_eq!(
@@ -223,7 +215,7 @@ mod test {
         );
         assert_eq!(message.get_dead_members(), []);
 
-        let mut message = Message::create(MessageType::Ping, 1, 2);
+        let mut message = Message::create(MessageType::Ping, 1);
         message.with_members(&[], &[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]);
         assert_eq!(message.get_alive_members(), []);
         assert_eq!(
@@ -231,7 +223,7 @@ mod test {
             [SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())]
         );
 
-        let mut message = Message::create(MessageType::Ping, 1, 2);
+        let mut message = Message::create(MessageType::Ping, 1);
         message.with_members(
             &[SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap())],
             &[SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())],
@@ -245,7 +237,7 @@ mod test {
             [SocketAddr::V4(SocketAddrV4::from_str("192.168.0.1:20000").unwrap())]
         );
 
-        let mut message = Message::create(MessageType::Ping, 1, 2);
+        let mut message = Message::create(MessageType::Ping, 1);
         message.with_members(
             &[
                 SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:80").unwrap()),
@@ -265,12 +257,11 @@ mod test {
 
     #[test]
     fn from_bytes() {
-        let message = Message::create(MessageType::PingAck, 1, 10);
+        let message = Message::create(MessageType::PingAck, 1);
         let buffer = message.into_inner();
         let message = Message::from_bytes(buffer.as_ref(), buffer.len());
         assert_eq!(message.get_type(), MessageType::PingAck);
         assert_eq!(message.get_sequence_number(), 1);
-        assert_eq!(message.get_epoch(), 10);
         assert_eq!(message.get_alive_members(), []);
         assert_eq!(message.get_dead_members(), []);
     }

@@ -29,10 +29,17 @@ pub use crate::protocol_config::ProtocolConfig;
 #[deprecated(since = "0.0.6", note = "Please use `Node` instead.")]
 pub type Membership = Node;
 
+mod disseminated;
+mod incoming_message;
 mod least_disseminated_members;
+mod member;
 mod message;
+mod message_decoder;
+mod message_encoder;
 mod node;
+mod notification;
 mod protocol_config;
 mod result;
+mod suspicion;
 mod sync_node;
 mod unique_circular_buffer;
