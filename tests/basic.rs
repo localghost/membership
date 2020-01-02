@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 mod common;
 use crate::common::*;
+use failure::_core::time::Duration;
 
 type TestResult = std::result::Result<(), failure::Error>;
 
@@ -66,7 +67,7 @@ fn different_ports() -> TestResult {
         let mut node2 = Node::new(address2, Default::default());
 
         node1.start()?;
-        assert_eq!(&[], &node1.get_members()?);
+        assert_eq_unordered(&[address1], &node1.get_members()?);
 
         node2.join(address1)?;
         advance_epochs(2);
