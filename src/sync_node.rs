@@ -360,6 +360,7 @@ impl SyncNode {
     }
 
     fn handle_suspect(&mut self, member_id: MemberId) {
+        // FIXME: Might be inefficient to check entire deq
         if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
             info!("Start suspecting member {:?}", member_id);
             self.suspicions.push_back(Suspicion::new(member_id));
