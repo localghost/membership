@@ -12,10 +12,10 @@ type TestResult = std::result::Result<(), failure::Error>;
 
 #[test]
 fn all_members_alive() -> TestResult {
-    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
-        join_neighbours(&mut members)?;
+        join_leader(&mut members)?;
 
         advance_epochs(2);
 
@@ -31,12 +31,12 @@ fn all_members_alive() -> TestResult {
 
 #[test]
 fn dead_node_discovered() -> TestResult {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
-        join_neighbours(&mut members)?;
+        join_leader(&mut members)?;
 
-        advance_epochs(2);
+        advance_epochs(4);
 
         for member in &members {
             assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
@@ -46,7 +46,7 @@ fn dead_node_discovered() -> TestResult {
         let member = members.pop().unwrap();
         stop_members(&mut [member])?;
 
-        advance_epochs(2);
+        advance_epochs(4);
 
         for member in &members {
             assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
