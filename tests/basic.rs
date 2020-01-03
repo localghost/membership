@@ -31,12 +31,12 @@ fn all_members_alive() -> TestResult {
 
 #[test]
 fn dead_node_discovered() -> TestResult {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
+    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
         join_leader(&mut members)?;
 
-        advance_epochs(4);
+        advance_epochs(2);
 
         for member in &members {
             assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);

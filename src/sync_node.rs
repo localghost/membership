@@ -360,13 +360,21 @@ impl SyncNode {
     }
 
     fn handle_suspect(&mut self, member_id: MemberId) {
-        // FIXME: Might be inefficient to check entire deq
-        if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
-            info!("Start suspecting member {:?}", member_id);
-            self.suspicions.push_back(Suspicion::new(member_id));
-            self.notifications.add(Notification::Suspect {
-                member: self.members[&member_id].clone(),
-            });
+        match self.members.get(&member_id) {
+            Some(member) => {
+                // FIXME: Might be inefficient to check entire deq
+                if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
+                    info!("Start suspecting member {:?}", member_id);
+                    self.suspicions.push_back(Suspicion::new(member_id));
+                    self.notifications.add(Notification::Suspect {
+                        member: self.members[&member_id].clone(),
+                    });
+                }
+            }
+            None => debug!(
+                "Trying to suspect member {:?}, which has already been removed",
+                member_id
+            ),
         }
     }
 
