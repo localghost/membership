@@ -31,7 +31,7 @@ fn all_members_alive() -> TestResult {
 
 #[test]
 fn dead_node_discovered() -> TestResult {
-    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
         join_leader(&mut members)?;
