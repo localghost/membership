@@ -187,31 +187,40 @@ impl SyncNode {
                 }
             }
 
-            let mut suspicions = Vec::new();
-            loop {
-                match self.suspicions.front() {
-                    Some(ref suspicion) => {
-                        if now > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64)) {
-                            suspicions.push(self.suspicions.pop_front().unwrap());
-                        } else {
-                            break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-            for suspicion in suspicions {
+            for suspicion in self.drain_timeout_suspicions() {
                 self.handle_timeout_suspicion(&suspicion);
             }
 
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 //                self.show_metrics();
+                debug!("Notifications: {:?}", self.notifications);
+                debug!("Broadcast: {:?}", self.broadcast);
+
                 self.advance_epoch();
                 last_epoch_time = now;
             }
         }
 
         Ok(())
+    }
+
+    fn drain_timeout_suspicions(&mut self) -> Vec<Suspicion> {
+        let mut suspicions = Vec::new();
+        loop {
+            match self.suspicions.front() {
+                Some(ref suspicion) => {
+                    if std::time::Instant::now()
+                        > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64))
+                    {
+                        suspicions.push(self.suspicions.pop_front().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        suspicions
     }
 
     pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
@@ -282,6 +291,14 @@ impl SyncNode {
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
         debug!("{:?} <- {:?}", target, message);
+        // This can happen if this node is returning to a group before the group noticing that the node's previous
+        // instance has died.
+        // FIXME: this is not the best place for this, preferably it should be handled when receiving a message about
+        // oneself address but with different ID.
+        if target == self.myself.address {
+            debug!("Trying to send a message to myself, dropping it");
+            return;
+        }
         match self.udp.as_ref().unwrap().send_to(message.buffer(), &target) {
             Err(e) => warn!("Message to {:?} was not delivered due to {:?}", target, e),
             Ok(count) => {
@@ -360,12 +377,19 @@ impl SyncNode {
     }
 
     fn handle_suspect(&mut self, member_id: MemberId) {
-        if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
-            info!("Start suspecting member {:?}", member_id);
-            self.suspicions.push_back(Suspicion::new(member_id));
-            self.notifications.add(Notification::Suspect {
-                member: self.members[&member_id].clone(),
-            });
+        match self.members.get(&member_id) {
+            Some(member) => {
+                // FIXME: Might be inefficient to check entire deq
+                if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
+                    info!("Start suspecting member {:?}", member_id);
+                    self.suspicions.push_back(Suspicion::new(member_id));
+                    self.notifications.add(Notification::Suspect { member: member.clone() });
+                }
+            }
+            None => debug!(
+                "Trying to suspect member {:?}, which has already been removed",
+                member_id
+            ),
         }
     }
 
@@ -442,18 +466,6 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        //                        let mut message = Message::create(MessageType::Ping, header.sequence_number);
-                        //                        // FIXME pick members with the lowest recently visited counter (mark to not starve the ones with highest visited counter)
-                        //                        // as that may lead to late failure discovery
-                        //                        message.with_members(
-                        //                            &self
-                        //                                .alive_disseminated_members
-                        //                                .get_members()
-                        //                                .filter(|&member| *member != header.target)
-                        //                                .cloned()
-                        //                                .collect::<Vec<_>>(),
-                        //                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                        //                        );
                         self.send_message(self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
@@ -496,23 +508,7 @@ impl SyncNode {
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
                         self.send_message(self.members[&header.member_id].address, message);
-                    } //                    Request::AckIndirect(header, member) => {
-                      //                        let message = DisseminationMessageEncoder::new(1024)
-                      //                            .message_type(MessageType::PingAck)?
-                      //                            .sequence_number(header.sequence_number)?
-                      //                            .notifications(self.notifications.iter())?
-                      //                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
-                      //                            .encode();
-                      //                        let mut message = Message::create(MessageType::PingAck, header.sequence_number);
-                      //                        message.with_members(
-                      //                            &std::iter::once(&member)
-                      //                                .chain(self.alive_disseminated_members.get_members())
-                      //                                .cloned()
-                      //                                .collect::<Vec<_>>(),
-                      //                            &self.dead_members.iter().cloned().collect::<Vec<_>>(),
-                      //                        );
-                      //                        self.send_message(&header.target, &message);
-                      //                    }
+                    }
                 }
             }
         }

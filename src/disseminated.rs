@@ -2,6 +2,7 @@
 
 use failure::_core::ops::Deref;
 
+#[derive(Debug)]
 pub(crate) struct Disseminated<T> {
     items: Vec<(T, u64)>,
 }
