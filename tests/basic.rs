@@ -36,7 +36,7 @@ fn dead_node_discovered() -> TestResult {
         let mut members = create_members(3);
         join_leader(&mut members)?;
 
-        advance_epochs(5);
+        advance_epochs(2);
 
         for member in &members {
             assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
@@ -46,6 +46,7 @@ fn dead_node_discovered() -> TestResult {
         let member = members.pop().unwrap();
         stop_members(&mut [member])?;
 
+        // This includes suspicion that by default is twice the epoch.
         advance_epochs(5);
 
         for member in &members {

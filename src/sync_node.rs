@@ -81,6 +81,7 @@ pub(crate) enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
+// Unfortunately SyncNode needs to be passed explicitly, it cannot be captured by closure.
 struct Timeout<F: FnOnce(&mut SyncNode)> {
     when: std::time::Instant,
     what: F,
