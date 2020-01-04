@@ -289,8 +289,6 @@ impl SyncNode {
         Ok(())
     }
 
-    fn request(&mut self) {}
-
     fn bind(&mut self, poll: &Poll) -> Result<()> {
         self.udp = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind UDP socket")?);
         // FIXME: change to `PollOpt::edge()`
