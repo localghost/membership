@@ -81,6 +81,11 @@ pub(crate) enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
+struct Timeout<F: FnOnce(&mut SyncNode)> {
+    when: std::time::Instant,
+    what: F,
+}
+
 /// Runs the protocol on current thread, blocking it.
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
@@ -101,6 +106,7 @@ pub(crate) struct SyncNode {
     acks: Vec<Ack>,
     rng: SmallRng,
     suspicions: VecDeque<Suspicion>,
+    timeouts: Vec<Timeout<Box<dyn FnOnce(&mut SyncNode) + Send>>>,
 }
 
 impl SyncNode {
@@ -125,6 +131,7 @@ impl SyncNode {
             acks: Vec::<Ack>::with_capacity(32),
             rng: SmallRng::from_entropy(),
             suspicions: VecDeque::new(),
+            timeouts: Vec::new(),
         };
         info!("My id is {:?}", gossip.myself.id);
         (gossip, sender)
@@ -199,9 +206,18 @@ impl SyncNode {
                 self.advance_epoch();
                 last_epoch_time = now;
             }
+
+            self.handle_timeouts();
         }
 
         Ok(())
+    }
+
+    fn handle_timeouts(&mut self) {
+        let now = std::time::Instant::now();
+        let (handle, postpone): (Vec<_>, Vec<_>) = self.timeouts.drain(..).partition(|t| t.when <= now);
+        handle.into_iter().for_each(|t| (t.what)(self));
+        self.timeouts = postpone;
     }
 
     fn drain_timeout_suspicions(&mut self) -> Vec<Suspicion> {
@@ -255,7 +271,11 @@ impl SyncNode {
     fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
         match ack.request {
             Request::Init(address) => {
-                return Err(format_err!("Failed to join {}", address));
+                info!("Failed to join {}", address);
+                self.timeouts.push(Timeout {
+                    when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
+                    what: Box::new(|myself| myself.requests.push_front(ack.request)),
+                });
             }
             Request::Ping(header) => {
                 self.requests.push_back(Request::PingIndirect(header));
@@ -267,6 +287,8 @@ impl SyncNode {
         }
         Ok(())
     }
+
+    fn request(&mut self) {}
 
     fn bind(&mut self, poll: &Poll) -> Result<()> {
         self.udp = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind UDP socket")?);
@@ -293,8 +315,8 @@ impl SyncNode {
         debug!("{:?} <- {:?}", target, message);
         // This can happen if this node is returning to a group before the group noticing that the node's previous
         // instance has died.
-        // FIXME: this is not the best place for this, preferably it should be handled when receiving a message about
-        // oneself address but with different ID.
+        // FIXME: this is not the best place for this, preferably it should be handled when receiving a message
+        // with member ID not matching oneself.
         if target == self.myself.address {
             debug!("Trying to send a message to myself, dropping it");
             return;
@@ -333,7 +355,7 @@ impl SyncNode {
         }
     }
 
-    fn update_members<'a>(&mut self, members: impl Iterator<Item = &'a Member>) {
+    fn update_members<'m>(&mut self, members: impl Iterator<Item = &'m Member>) {
         for member in members {
             self.update_member(member);
         }
@@ -347,7 +369,7 @@ impl SyncNode {
         }
     }
 
-    fn update_notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) {
+    fn update_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
         // TODO: check this does not miss notifications with not yet seen members
         // TODO: remove from self.notifications those notifications that are overridden by the new ones
         for notification in notifications {
