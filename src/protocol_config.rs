@@ -18,6 +18,9 @@ pub struct ProtocolConfig {
 
     /// Number of seconds to keep member as suspected before removing it.
     pub suspect_timeout: u64,
+
+    /// Number of seconds until failed join request will be retried.
+    pub join_retry_timeout: u64,
 }
 
 impl Default for ProtocolConfig {
@@ -27,6 +30,7 @@ impl Default for ProtocolConfig {
             ack_timeout: 1,
             num_indirect: 3,
             suspect_timeout: 10,
+            join_retry_timeout: 3,
         }
     }
 }

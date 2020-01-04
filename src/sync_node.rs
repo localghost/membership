@@ -81,7 +81,7 @@ pub(crate) enum ChannelMessage {
     GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
 }
 
-struct Timeout<F: FnOnce(&SyncNode)> {
+struct Timeout<F: FnOnce(&mut SyncNode)> {
     when: std::time::Instant,
     what: F,
 }
@@ -106,7 +106,7 @@ pub(crate) struct SyncNode {
     acks: Vec<Ack>,
     rng: SmallRng,
     suspicions: VecDeque<Suspicion>,
-    timeouts: Vec<Timeout<Box<dyn FnOnce(&SyncNode) + Send>>>,
+    timeouts: Vec<Timeout<Box<dyn FnOnce(&mut SyncNode) + Send>>>,
 }
 
 impl SyncNode {
@@ -207,14 +207,17 @@ impl SyncNode {
                 last_epoch_time = now;
             }
 
-            let mut timeouts = Vec::new();
-            std::mem::swap(&mut timeouts, &mut self.timeouts);
-            let (call, postpone): (Vec<_>, Vec<_>) = timeouts.into_iter().partition(|t| t.when <= now);
-            call.into_iter().for_each(|t| (t.what)(self));
-            self.timeouts = postpone;
+            self.handle_timeouts();
         }
 
         Ok(())
+    }
+
+    fn handle_timeouts(&mut self) {
+        let now = std::time::Instant::now();
+        let (handle, postpone): (Vec<_>, Vec<_>) = self.timeouts.drain(..).partition(|t| t.when <= now);
+        handle.into_iter().for_each(|t| (t.what)(self));
+        self.timeouts = postpone;
     }
 
     fn drain_timeout_suspicions(&mut self) -> Vec<Suspicion> {
@@ -269,13 +272,10 @@ impl SyncNode {
         match ack.request {
             Request::Init(address) => {
                 info!("Failed to join {}", address);
-                self.requests.push_front(ack.request);
-                //                self.timeouts.push(Timeout {
-                //                    when: std::time::Instant::now() + std::time::Duration::from_secs(3),
-                //                    //                    what: Box::new(move || self.requests.push_front(ack.request)),
-                //                    what: some,
-                //                });
-                //                return Err(format_err!("Failed to join {}", address));
+                self.timeouts.push(Timeout {
+                    when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
+                    what: Box::new(|myself| myself.requests.push_front(ack.request)),
+                });
             }
             Request::Ping(header) => {
                 self.requests.push_back(Request::PingIndirect(header));
