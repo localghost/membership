@@ -399,15 +399,6 @@ impl SyncNode {
         }
     }
 
-    fn remove_members<T>(&mut self, members: T)
-    where
-        T: Iterator<Item = Member>,
-    {
-        for member in members {
-            self.remove_member(&member.id);
-        }
-    }
-
     fn remove_member(&mut self, member_id: &MemberId) {
         if let Some(removed_member) = self.members.remove(member_id) {
             let idx = self.ping_order.iter().position(|e| e == member_id).unwrap();
