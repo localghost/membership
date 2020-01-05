@@ -185,20 +185,13 @@ impl SyncNode {
                 }
             }
 
+            self.handle_acks()?;
+
+            self.drain_timeout_suspicions()
+                .into_iter()
+                .for_each(|s| self.handle_timeout_suspicion(&s));
+
             let now = std::time::Instant::now();
-
-            for ack in self.acks.drain(..).collect::<Vec<_>>() {
-                if now > (ack.request_time + Duration::from_secs(self.config.ack_timeout as u64)) {
-                    self.handle_timeout_ack(ack)?;
-                } else {
-                    self.acks.push(ack);
-                }
-            }
-
-            for suspicion in self.drain_timeout_suspicions() {
-                self.handle_timeout_suspicion(&suspicion);
-            }
-
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 //                self.show_metrics();
                 debug!("Notifications: {:?}", self.notifications);
@@ -211,6 +204,18 @@ impl SyncNode {
             self.handle_timeouts();
         }
 
+        Ok(())
+    }
+
+    fn handle_acks(&mut self) -> Result<()> {
+        let now = std::time::Instant::now();
+        let ack_timeout = Duration::from_secs(self.config.ack_timeout as u64);
+        let (handle, postpone): (Vec<_>, Vec<_>) = self
+            .acks
+            .drain(..)
+            .partition(|ack| ack.request_time + ack_timeout <= now);
+        handle.into_iter().try_for_each(|ack| self.handle_timeout_ack(ack))?;
+        self.acks = postpone;
         Ok(())
     }
 
