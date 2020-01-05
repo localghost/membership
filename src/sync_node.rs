@@ -2,29 +2,26 @@
 
 use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
-use crate::least_disseminated_members::DisseminatedMembers;
 use crate::member::Id as MemberId;
 use crate::member::Member;
-use crate::message::{Message, MessageType};
+use crate::message::MessageType;
 use crate::message_decoder::decode_message;
 use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
 use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
-use crate::unique_circular_buffer::UniqueCircularBuffer;
 use crate::ProtocolConfig;
 //use crypto::digest::Digest;
 //use crypto::sha1::Sha1;
-use bytes::Bytes;
 use failure::{format_err, ResultExt};
 use log::{debug, info, warn};
-use mio::net::{TcpListener, TcpStream, UdpSocket};
+use mio::net::UdpSocket;
 use mio::{Event, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{Receiver, Sender};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -91,11 +88,9 @@ struct Timeout<F: FnOnce(&mut SyncNode)> {
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     udp: Option<UdpSocket>,
-    tcp: Option<TcpListener>,
     ping_order: Vec<MemberId>,
     broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
-    dead_members: UniqueCircularBuffer<SocketAddr>,
     members: HashMap<MemberId, Member>,
     next_member_index: usize,
     epoch: u64,
@@ -116,11 +111,9 @@ impl SyncNode {
         let gossip = SyncNode {
             config,
             udp: None,
-            tcp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
-            dead_members: UniqueCircularBuffer::new(5),
             members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
@@ -177,10 +170,6 @@ impl SyncNode {
                             debug!("Not ready yet: {:?}", e);
                         }
                     },
-                    //                    Token(100) => match self.tcp.unwrap().accept() {
-                    //                        Ok(stream) => stream.,
-                    //                        Err(e) => warn!("Failed to accept TCP connection: {:?}", e);
-                    //                    },
                     _ => unreachable!(),
                 }
             }
@@ -304,15 +293,6 @@ impl SyncNode {
             PollOpt::level(),
         )
         .map_err(|e| format_err!("Failed to register UDP socket for polling: {:?}", e))
-
-        //        self.tcp = Some(TcpListener::bind(&self.myself.address).context("Failed to bind TCP socket")?);
-        //        poll.register(
-        //            self.tcp.as_ref().unwrap(),
-        //            Token(100),
-        //            Ready::readable() | Ready::writable(),
-        //            PollOpt::level(),
-        //        )
-        //        .map_err(|e| format_err!("Failed to register TCP socket for polling: {:?}", e))
     }
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
