@@ -1,4 +1,4 @@
-use crate::member::Id as MemberId;
+use crate::member::MemberId;
 use std::time::Instant;
 
 pub(crate) struct Suspicion {

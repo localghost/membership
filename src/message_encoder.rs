@@ -49,14 +49,14 @@ impl OutgoingMessage {
 fn encode_member(member: &Member, buffer: &mut BytesMut) {
     let position = buffer.len();
     buffer.put_u8(0u8);
-    buffer.put_slice(&member.id);
+    buffer.put_slice(member.id.as_slice());
     buffer.put_u64_be(member.incarnation);
     match member.address {
         SocketAddr::V4(address) => {
             buffer.put_slice(&address.ip().octets());
             buffer.put_u16_be(address.port());
         }
-        SocketAddr::V6(address) => {
+        SocketAddr::V6(_) => {
             buffer[position] = 1u8 << 7;
             todo!();
         }
@@ -300,7 +300,7 @@ impl DisseminationMessageEncoder {
     fn encode_member(&mut self, member: &Member) -> Result<()> {
         let position = self.message.buffer.len();
         self.message.buffer.put_u8(0u8);
-        self.message.buffer.put_slice(&member.id);
+        self.message.buffer.put_slice(member.id.as_slice());
         self.message.buffer.put_u64_be(member.incarnation);
         match member.address {
             SocketAddr::V4(address) => {

@@ -5,6 +5,7 @@ use failure::_core::ops::Deref;
 #[derive(Debug)]
 pub(crate) struct Disseminated<T> {
     items: Vec<(T, u64)>,
+    limit: Option<u64>,
 }
 
 impl<T> Disseminated<T>
@@ -12,7 +13,16 @@ where
     T: std::cmp::PartialEq,
 {
     pub(crate) fn new() -> Disseminated<T> {
-        Disseminated { items: Vec::new() }
+        Disseminated {
+            items: Vec::new(),
+            limit: None,
+        }
+    }
+
+    pub(crate) fn with_limit(limit: u64) -> Disseminated<T> {
+        let mut result = Self::new();
+        result.set_limit(limit);
+        result
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
@@ -29,11 +39,20 @@ where
     }
 
     pub(crate) fn remove(&mut self, item: &T) {
-        self.items.remove(self.items.iter().position(|m| m.0 == *item).unwrap());
+        if let Some(position) = self.items.iter().position(|m| m.0 == *item) {
+            self.items.remove(position);
+        }
+    }
+
+    pub(crate) fn set_limit(&mut self, limit: u64) {
+        self.limit = Some(limit);
     }
 
     fn update(&mut self) {
         self.items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        if let Some(limit) = self.limit {
+            self.items = self.items.drain(..).filter(|item| item.1 <= limit).collect::<Vec<_>>();
+        }
     }
 }
 

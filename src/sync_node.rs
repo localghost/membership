@@ -2,8 +2,7 @@
 
 use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
-use crate::member::Id as MemberId;
-use crate::member::Member;
+use crate::member::{Member, MemberId};
 use crate::message::MessageType;
 use crate::message_decoder::decode_message;
 use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
@@ -113,7 +112,7 @@ impl SyncNode {
             udp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
-            notifications: Disseminated::new(),
+            notifications: Disseminated::with_limit(1),
             members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
@@ -365,7 +364,6 @@ impl SyncNode {
                 Notification::Alive { member } => self.handle_alive(member),
                 Notification::Suspect { member } => self.handle_suspect(member.id),
             }
-            self.notifications.add((*notification).clone());
             let obsolete_notifications = self
                 .notifications
                 .iter()
@@ -375,6 +373,7 @@ impl SyncNode {
             for n in obsolete_notifications {
                 self.notifications.remove(&n);
             }
+            self.notifications.add((*notification).clone());
         }
     }
 

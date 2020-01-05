@@ -1,5 +1,5 @@
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
-use crate::member::{Id as MemberId, Member};
+use crate::member::{Member, MemberId};
 use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
