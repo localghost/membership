@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 mod common;
 use crate::common::*;
-use failure::_core::time::Duration;
 
 type TestResult = std::result::Result<(), failure::Error>;
 

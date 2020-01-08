@@ -16,7 +16,7 @@ impl PartialEq for Notification {
 
 impl PartialOrd for Notification {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.member().address != other.member().address {
+        if self.member().id != other.member().id {
             return None;
         }
         match self {
@@ -39,7 +39,7 @@ impl PartialOrd for Notification {
                 }
                 Notification::Confirm { .. } => Some(Ordering::Less),
             },
-            Notification::Confirm { member } => match other {
+            Notification::Confirm { .. } => match other {
                 Notification::Alive { .. } | Notification::Suspect { .. } => Some(Ordering::Greater),
                 Notification::Confirm { .. } => Some(Ordering::Equal),
             },
@@ -54,13 +54,6 @@ impl Notification {
             }
         }
     }
-}
-
-#[repr(u8)]
-enum NotificationType {
-    Alive = 1,
-    Suspect,
-    Confirm,
 }
 
 //#[cfg(test)]

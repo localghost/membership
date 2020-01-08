@@ -4,6 +4,7 @@ pub struct UniqueCircularBuffer<T> {
 }
 
 // FIXME not the most effective implementation, consider using a list or research for a better data structure
+#[allow(dead_code)]
 impl<T> UniqueCircularBuffer<T> {
     pub fn new(size: usize) -> Self {
         UniqueCircularBuffer {
@@ -40,7 +41,6 @@ impl<T> UniqueCircularBuffer<T> {
         indices.len()
     }
 
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }

@@ -2,10 +2,12 @@
 
 use std::net::SocketAddr;
 
+#[allow(dead_code)]
 pub(crate) struct DisseminatedMembers {
     members: Vec<(SocketAddr, u64)>,
 }
 
+#[allow(dead_code)]
 impl DisseminatedMembers {
     pub(crate) fn new() -> DisseminatedMembers {
         DisseminatedMembers { members: Vec::new() }

@@ -17,6 +17,7 @@ pub(super) struct Message {
     buffer: BytesMut,
 }
 
+#[allow(dead_code)]
 impl Message {
     pub(super) fn create(message_type: MessageType, sequence_number: u64) -> Self {
         let mut message = Message {
@@ -147,6 +148,7 @@ impl Message {
         self.buffer
     }
 
+    #[allow(dead_code)]
     pub(super) fn buffer(&self) -> &[u8] {
         &self.buffer
     }

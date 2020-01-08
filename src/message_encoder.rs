@@ -11,9 +11,6 @@ pub(crate) struct PingRequestMessageOut {
     buffer: Bytes,
 }
 
-struct PingMessage {}
-struct AckMessage {}
-
 #[derive(Debug)]
 pub(crate) struct DisseminationMessageOut {
     buffer: BytesMut,

@@ -89,6 +89,7 @@ pub fn create_members(num_members: u8) -> Vec<Node> {
 }
 
 // FIXME: doesn't work for now, a member that other member wants to join to may not have been started yet.
+#[allow(dead_code)]
 pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
     let join_addresses = members
         .iter()
@@ -96,7 +97,7 @@ pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
         .chain(members.iter().take(1))
         .map(|m| m.bind_address())
         .collect::<Vec<_>>();
-    members[0].start();
+    members[0].start()?;
     members
         .iter_mut()
         .skip(1)
@@ -106,7 +107,7 @@ pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
 
 pub fn join_leader(members: &mut [Node]) -> Result<(), failure::Error> {
     let leader = &mut members[0];
-    leader.start();
+    leader.start()?;
 
     let join_address = leader.bind_address();
     members.iter_mut().skip(1).try_for_each(|m| m.join(join_address))

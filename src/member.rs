@@ -102,7 +102,7 @@ fn generate_id(address: SocketAddr) -> MemberId {
     };
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => hasher.input(duration.as_millis().to_be_bytes()),
-        Err(e) => hasher.input(SmallRng::from_entropy().gen::<u64>().to_be_bytes()),
+        Err(_) => hasher.input(SmallRng::from_entropy().gen::<u64>().to_be_bytes()),
     }
     MemberId(hasher.result().into())
 }
