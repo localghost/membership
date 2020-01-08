@@ -181,28 +181,35 @@ pub(crate) fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
 mod test {
     use super::*;
     use bytes::{BufMut, BytesMut};
+    use rand::AsByteSliceMut;
     use std::str::FromStr;
 
-    //    #[test]
-    //    fn decode_empty_message() {
-    //        let mut buffer = BytesMut::new();
-    //        buffer.put_i32_be(MessageType::Ping as i32);
-    //        buffer.put_u64_be(42);
-    //
-    //        //        let message = ;
-    //        match decode_message(&buffer).unwrap() {
-    //            IncomingMessage::Ping(message) => assert_eq!(message.sequence_number, 42),
-    //            _ => assert!(false),
-    //        }
-    //        //        if let IncomingMessage::Ping(message) =  {
-    //        //        } else {
-    //        //            assert
-    //        //        }
-    //        //        assert_eq!(message.message_type, MessageType::Ping);
-    //        //        assert_eq!(message.sequence_number, 42);
-    //        //        assert!(message.notifications.is_empty());
-    //        //        assert!(message.broadcast.is_empty());
-    //    }
+    #[test]
+    fn decode_empty_message() {
+        let mut buffer = BytesMut::with_capacity(47);
+        buffer.put_i32_be(MessageType::Ping as i32); // message type
+        buffer.put_u8(0); // address type
+        buffer.put_slice(&[0u8; 20]); // member id
+        buffer.put_u64_be(0); // incarnation number
+        buffer.put_slice(&[0u8; 4]); // IP address
+        buffer.put_u16_be(0); // port
+        buffer.put_u64_be(42); // sequence number
+
+        match decode_message(&buffer).unwrap() {
+            IncomingMessage::Ping(message) => {
+                assert_eq!(message.sequence_number, 42);
+                assert_eq!(
+                    message.sender,
+                    Member {
+                        id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+                        address: SocketAddr::from_str("0.0.0.0:0").unwrap(),
+                        incarnation: 0
+                    }
+                );
+            }
+            _ => assert!(false),
+        }
+    }
     //
     //    #[test]
     //    fn decode_message_with_notifications() {
