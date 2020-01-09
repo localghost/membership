@@ -90,7 +90,7 @@ mod test {
             disseminated.iter().cloned().collect::<Vec<_>>()
         );
 
-        //        disseminated.remove(make_members(&["192.168.0.1"])[0]);
+        disseminated.remove(&make_members(&["192.168.0.1"])[0]);
         assert_eq!(
             make_members(&["10.0.0.1", "127.0.0.1"]),
             disseminated.iter().cloned().collect::<Vec<_>>()

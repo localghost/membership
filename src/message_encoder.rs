@@ -248,7 +248,6 @@ impl DisseminationMessageEncoder {
         }
         let count_position = self.message.buffer.len();
         self.message.buffer.put_u8(0);
-        //        self.message.buffer.resize(self.message.buffer.len() + 1, 0u8);
         let mut count = 0;
         for notification in notifications {
             if self.notification_size(notification) > self.message.buffer.remaining_mut() {
