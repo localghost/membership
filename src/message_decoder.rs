@@ -210,38 +210,6 @@ mod test {
             _ => assert!(false),
         }
     }
-    //
-    //    #[test]
-    //    fn decode_message_with_notifications() {
-    //        let mut buffer = BytesMut::new();
-    //        buffer.put_i32_be(MessageType::Ping as i32);
-    //        buffer.put_u64_be(42);
-    //        buffer.put_u8(1);
-    //        buffer.put_u8(0);
-    //        buffer.put_slice(&Ipv4Addr::from_str("127.0.0.1").unwrap().octets());
-    //        buffer.put_u16_be(4567);
-    //        buffer.put_u64_be(123);
-    //
-    //        let message = decode_message(&buffer).unwrap();
-    //        assert_eq!(message.message_type, MessageType::Ping);
-    //        assert_eq!(message.sequence_number, 42);
-    //        assert!(message.broadcast.is_empty());
-    //        assert_eq!(1, message.notifications.len());
-    //
-    //        let notification = message.notifications.get(0).unwrap();
-    //        if let Notification::Alive { member } = notification {
-    //            assert!(member.address.is_ipv4());
-    //            assert_eq!("127.0.0.1:4567", member.address.to_string());
-    //            assert_eq!(123, member.incarnation);
-    //        } else {
-    //            assert!(false, "Not an Alive notification.");
-    //        }
-    //    }
-    //
-    //    #[test]
-    //    fn decode_message_with_broadcast() {
-    //        // TODO
-    //    }
 
     #[test]
     fn decode_encoded_dissemination_message() -> Result<()> {
