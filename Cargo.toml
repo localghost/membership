@@ -1,5 +1,5 @@
 [workspace]
 members = [
     "membership",
-    "encoder"
+    "membership_encoder"
 ]

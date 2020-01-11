@@ -122,7 +122,7 @@ impl PingRequestMessageEncoder {
 
 //pub(crate) fn encode_message(max_size: usize) -> OutgoingMessageWithType {
 //    OutgoingMessageWithType {
-//        encoder: MessageEncoder {
+//        membership_encoder: MessageEncoder {
 //            message: OutgoingMessage {
 //                buffer: BytesMut::with_capacity(max_size),
 //                num_notifications: 0,
@@ -133,50 +133,50 @@ impl PingRequestMessageEncoder {
 //}
 
 //struct OutgoingMessageWithType {
-//    encoder: MessageEncoder,
+//    membership_encoder: MessageEncoder,
 //}
 //
 //impl OutgoingMessageWithType {
 //    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<OutgoingMessageWithSequenceNumber> {
-//        self.encoder.message_type(message_type)?;
-//        Ok(OutgoingMessageWithSequenceNumber { encoder: self.encoder })
+//        self.membership_encoder.message_type(message_type)?;
+//        Ok(OutgoingMessageWithSequenceNumber { membership_encoder: self.membership_encoder })
 //    }
 //}
 //
 //struct OutgoingMessageWithSequenceNumber {
-//    encoder: MessageEncoder,
+//    membership_encoder: MessageEncoder,
 //}
 //
 //impl OutgoingMessageWithSequenceNumber {
 //    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<OutgoingMessageWithNotifications> {
-//        self.encoder.sequence_number(sequence_number)?;
-//        Ok(OutgoingMessageWithNotifications { encoder: self.encoder })
+//        self.membership_encoder.sequence_number(sequence_number)?;
+//        Ok(OutgoingMessageWithNotifications { membership_encoder: self.membership_encoder })
 //    }
 //}
 //
 //struct OutgoingMessageWithNotifications {
-//    encoder: MessageEncoder,
+//    membership_encoder: MessageEncoder,
 //}
 //
 //impl OutgoingMessageWithNotifications {
 //    pub(crate) fn notifications(mut self, notifications: &[Notification]) -> Result<OutgoingMessageWithBroadcast> {
-//        self.encoder.message.num_notifications = self.encoder.notifications(notifications)?;
-//        Ok(OutgoingMessageWithBroadcast { encoder: self.encoder })
+//        self.membership_encoder.message.num_notifications = self.membership_encoder.notifications(notifications)?;
+//        Ok(OutgoingMessageWithBroadcast { membership_encoder: self.membership_encoder })
 //    }
 //}
 //
 //struct OutgoingMessageWithBroadcast {
-//    encoder: MessageEncoder,
+//    membership_encoder: MessageEncoder,
 //}
 //
 //impl OutgoingMessageWithBroadcast {
 //    pub(crate) fn broadcast(&mut self, members: &[Member]) -> Result<()> {
-//        self.encoder.message.num_broadcast = self.encoder.broadcast(members)?;
+//        self.membership_encoder.message.num_broadcast = self.membership_encoder.broadcast(members)?;
 //        Ok(())
 //    }
 //
 //    pub(crate) fn build(mut self) -> Bytes {
-//        self.encoder.message.buffer.freeze()
+//        self.membership_encoder.message.buffer.freeze()
 //    }
 //}
 
