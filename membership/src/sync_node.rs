@@ -131,6 +131,7 @@ impl SyncNode {
     }
 
     pub(crate) fn start(&mut self) -> Result<()> {
+        info!("Encoder generated: {}", membership_encoder::encode!(seqno(2)));
         let poll = Poll::new().unwrap();
         poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
         self.bind(&poll)?;
