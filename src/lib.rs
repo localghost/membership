@@ -13,7 +13,7 @@
 //!
 //! let mut ms1 = Node::new(SocketAddr::from_str("127.0.0.1:2345").unwrap(), Default::default());
 //! let mut ms2 = Node::new(SocketAddr::from_str("127.0.0.1:3456").unwrap(), Default::default());
-//! ms1.join(SocketAddr::from_str("127.0.0.1:3456").unwrap()).unwrap();
+//! ms1.start().unwrap();
 //! ms2.join(SocketAddr::from_str("127.0.0.1:2345").unwrap()).unwrap();
 //! std::thread::sleep(Duration::from_secs(ProtocolConfig::default().protocol_period * 2));
 //! println!("{:?}", ms1.get_members().unwrap());
