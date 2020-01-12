@@ -153,13 +153,16 @@ impl PingRequestMessageEncoder {
 }
 
 pub(crate) struct MessageTypeEncoder {
-    encoder: DisseminationMessageEncoder,
+    buffer: BytesMut,
 }
 
 impl MessageTypeEncoder {
     pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<SenderEncoder> {
-        self.encoder.message_type(message_type)?;
-        Ok(SenderEncoder { encoder: self.encoder })
+        if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
+            return Err(format_err!("Could not encode message type"));
+        }
+        self.buffer.put_i32_be(message_type as i32);
+        Ok(SenderEncoder { buffer: self.buffer })
         //        Ok(SenderEncoder2 {
         //            buffer: self.encoder.message.buffer,
         //            phantom: PhantomData,
@@ -168,24 +171,27 @@ impl MessageTypeEncoder {
 }
 
 pub(crate) struct SenderEncoder {
-    encoder: DisseminationMessageEncoder,
+    buffer: BytesMut,
 }
 
 impl SenderEncoder {
     pub(crate) fn sender(mut self, member: &Member) -> Result<SequenceNumberEncoder> {
-        self.encoder.sender(member)?;
-        Ok(SequenceNumberEncoder { encoder: self.encoder })
+        encode_member(member, &mut self.buffer)?;
+        Ok(SequenceNumberEncoder { buffer: self.buffer })
     }
 }
 
 pub(crate) struct SequenceNumberEncoder {
-    encoder: DisseminationMessageEncoder,
+    buffer: BytesMut,
 }
 
 impl SequenceNumberEncoder {
     pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<NotificationsEncoder> {
-        self.encoder.sequence_number(sequence_number)?;
-        Ok(NotificationsEncoder { encoder: self.encoder })
+        if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
+            return Err(format_err!("Could not encode sequence number"));
+        }
+        self.buffer.put_u64_be(sequence_number);
+        Ok(NotificationsEncoder { buffer: self.buffer })
     }
 }
 
@@ -198,7 +204,7 @@ impl SequenceNumberEncoder {
 //}
 
 pub(crate) struct NotificationsEncoder {
-    encoder: DisseminationMessageEncoder,
+    buffer: BytesMut,
 }
 
 impl NotificationsEncoder {
