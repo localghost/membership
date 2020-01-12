@@ -131,7 +131,7 @@ impl PingRequestMessageEncoder {
     }
 
     pub(crate) fn sender(mut self, member: &Member) -> Result<Self> {
-        encode_member(member, &mut self.buffer);
+        encode_member(member, &mut self.buffer)?;
         Ok(self)
     }
 
@@ -141,7 +141,7 @@ impl PingRequestMessageEncoder {
     }
 
     pub(crate) fn target(mut self, member: &Member) -> Result<Self> {
-        encode_member(member, &mut self.buffer);
+        encode_member(member, &mut self.buffer)?;
         Ok(self)
     }
 
@@ -191,7 +191,10 @@ impl SequenceNumberEncoder {
             return Err(format_err!("Could not encode sequence number"));
         }
         self.buffer.put_u64_be(sequence_number);
-        Ok(NotificationsEncoder { buffer: self.buffer })
+        Ok(NotificationsEncoder {
+            buffer: self.buffer,
+            num_notifications: 0,
+        })
     }
 }
 
@@ -205,6 +208,7 @@ impl SequenceNumberEncoder {
 
 pub(crate) struct NotificationsEncoder {
     buffer: BytesMut,
+    num_notifications: usize,
 }
 
 impl NotificationsEncoder {
@@ -212,159 +216,93 @@ impl NotificationsEncoder {
         mut self,
         notifications: impl Iterator<Item = &'a Notification>,
     ) -> Result<BroadcastEncoder> {
-        self.encoder.notifications(notifications)?;
-        Ok(BroadcastEncoder { encoder: self.encoder })
+        if !self.buffer.has_remaining_mut() {
+            return Err(format_err!("Not enough space to encode notifications"));
+        }
+        let count_position = self.buffer.len();
+        self.buffer.put_u8(0);
+        let mut count = 0;
+        for notification in notifications {
+            self.encode_notification(notification)?;
+            count += 1;
+        }
+        self.buffer[count_position] = count;
+        self.num_notifications = count as usize;
+        Ok(BroadcastEncoder {
+            buffer: self.buffer,
+            num_notifications: self.num_notifications,
+            num_broadcast: 0,
+        })
     }
 
     pub(crate) fn encode(self) -> OutgoingMessage {
-        self.encoder.encode()
+        OutgoingMessage::DisseminationMessage(DisseminationMessageOut {
+            buffer: self.buffer,
+            num_notifications: self.num_notifications,
+            num_broadcast: 0,
+        })
+    }
+
+    fn encode_notification(&mut self, notification: &Notification) -> Result<()> {
+        if self.buffer.remaining_mut() < 1 {
+            return Err(format_err!("Could not encode notification type"));
+        }
+        match notification {
+            Notification::Alive { member } => {
+                self.buffer.put_u8(0);
+                encode_member(member, &mut self.buffer)?;
+            }
+            Notification::Suspect { member } => {
+                self.buffer.put_u8(1);
+                encode_member(member, &mut self.buffer)?;
+            }
+            Notification::Confirm { member } => {
+                self.buffer.put_u8(2);
+                encode_member(member, &mut self.buffer)?;
+            }
+        }
+        Ok(())
     }
 }
 
 pub(crate) struct BroadcastEncoder {
-    encoder: DisseminationMessageEncoder,
+    buffer: BytesMut,
+    num_notifications: usize,
+    num_broadcast: usize,
 }
 
 impl BroadcastEncoder {
     pub(crate) fn broadcast<'a>(mut self, members: impl Iterator<Item = &'a Member>) -> Result<Self> {
-        self.encoder.broadcast(members)?;
+        if !self.buffer.has_remaining_mut() {
+            return Err(format_err!("Not enough space to encode broadcast"));
+        }
+        let count_position = self.buffer.len();
+        self.buffer.resize(self.buffer.len() + 1, 0u8);
+        let mut count = 0;
+        for member in members {
+            encode_member(member, &mut self.buffer)?;
+            count += 1;
+        }
+        self.buffer[count_position] = count;
+        self.num_broadcast = count as usize;
         Ok(self)
     }
 
     pub(crate) fn encode(self) -> OutgoingMessage {
-        self.encoder.encode()
+        OutgoingMessage::DisseminationMessage(DisseminationMessageOut {
+            buffer: self.buffer,
+            num_notifications: self.num_notifications,
+            num_broadcast: self.num_broadcast,
+        })
     }
 }
 
-pub(crate) struct DisseminationMessageEncoder {
-    message: DisseminationMessageOut,
-}
+pub(crate) struct DisseminationMessageEncoder {}
 
 impl DisseminationMessageEncoder {
     pub(crate) fn new(max_size: usize) -> MessageTypeEncoder {
-        let encoder = DisseminationMessageEncoder {
-            message: DisseminationMessageOut {
-                buffer: BytesMut::with_capacity(max_size),
-                num_notifications: 0,
-                num_broadcast: 0,
-            },
-        };
-        MessageTypeEncoder { encoder }
-    }
-
-    fn sender(&mut self, member: &Member) -> Result<()> {
-        self.encode_member(member)?;
-        Ok(())
-    }
-
-    fn message_type(&mut self, message_type: MessageType) -> Result<()> {
-        if self.message.buffer.remaining_mut() < std::mem::size_of::<i32>() {
-            return Err(format_err!("Could not encode message type"));
+        MessageTypeEncoder {
+            buffer: BytesMut::with_capacity(max_size),
         }
-        self.message.buffer.put_i32_be(message_type as i32);
-        Ok(())
-    }
-
-    fn sequence_number(&mut self, sequence_number: u64) -> Result<()> {
-        if self.message.buffer.remaining_mut() < std::mem::size_of_val(&sequence_number) {
-            return Err(format_err!("Could not encode sequence number"));
-        }
-        self.message.buffer.put_u64_be(sequence_number);
-        Ok(())
-    }
-
-    fn encode_notification(&mut self, notification: &Notification) -> Result<()> {
-        match notification {
-            Notification::Alive { member } => {
-                self.message.buffer.put_u8(0);
-                self.encode_member(member)?;
-            }
-            Notification::Suspect { member } => {
-                self.message.buffer.put_u8(1);
-                self.encode_member(member)?;
-            }
-            Notification::Confirm { member } => {
-                self.message.buffer.put_u8(2);
-                self.encode_member(member)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn notification_size(&self, notification: &Notification) -> usize {
-        match notification {
-            Notification::Alive { member } | Notification::Confirm { member } | Notification::Suspect { member } => {
-                1 + self.member_size(member)
-            }
-        }
-    }
-
-    fn notifications<'a>(&mut self, notifications: impl Iterator<Item = &'a Notification>) -> Result<()> {
-        if !self.message.buffer.has_remaining_mut() {
-            return Err(format_err!("Not enough space to encode notifications"));
-        }
-        let count_position = self.message.buffer.len();
-        self.message.buffer.put_u8(0);
-        let mut count = 0;
-        for notification in notifications {
-            if self.notification_size(notification) > self.message.buffer.remaining_mut() {
-                break;
-            }
-            self.encode_notification(notification)?;
-            count += 1;
-        }
-        self.message.buffer[count_position] = count;
-        self.message.num_notifications = count as usize;
-        Ok(())
-    }
-
-    fn broadcast<'a>(&mut self, members: impl Iterator<Item = &'a Member>) -> Result<()> {
-        if !self.message.buffer.has_remaining_mut() {
-            return Err(format_err!("Not enough space to encode broadcast"));
-        }
-        let count_position = self.message.buffer.len();
-        self.message.buffer.resize(self.message.buffer.len() + 1, 0u8);
-        let mut count = 0;
-        for member in members {
-            if self.member_size(member) > self.message.buffer.remaining_mut() {
-                break;
-            }
-            self.encode_member(member)?;
-            count += 1;
-        }
-        self.message.buffer[count_position] = count;
-        self.message.num_broadcast = count as usize;
-        Ok(())
-    }
-
-    fn encode(self) -> OutgoingMessage {
-        OutgoingMessage::DisseminationMessage(self.message)
-    }
-
-    fn member_size(&self, member: &Member) -> usize {
-        if member.address.is_ipv4() {
-            // IP address + UDP port + incarnation number
-            4 + 2 + 8
-        } else {
-            unimplemented!()
-        }
-    }
-
-    fn encode_member(&mut self, member: &Member) -> Result<()> {
-        let position = self.message.buffer.len();
-        self.message.buffer.put_u8(0u8);
-        self.message.buffer.put_slice(member.id.as_slice());
-        self.message.buffer.put_u64_be(member.incarnation);
-        match member.address {
-            SocketAddr::V4(address) => {
-                self.message.buffer.put_slice(&address.ip().octets());
-                self.message.buffer.put_u16_be(address.port());
-            }
-            SocketAddr::V6(_) => {
-                self.message.buffer[position] = 1u8 << 7;
-                unimplemented!();
-            }
-        }
-        Ok(())
     }
 }
