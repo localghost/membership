@@ -6,6 +6,30 @@ use bytes::{BufMut, Bytes, BytesMut};
 use failure::format_err;
 use std::net::SocketAddr;
 
+//pub(crate) struct SenderEncoder2<T> {
+//    buffer: BytesMut,
+//    phantom: std::marker::PhantomData<T>,
+//}
+//
+//impl<T> SenderEncoder2<T>
+//where
+//    T: From<BytesMut>,
+//{
+//    pub(crate) fn sender(mut self, member: &Member) -> Result<T> {
+//        encode_member(member, &mut self.buffer);
+//        Ok(T::from(self.buffer))
+//    }
+//}
+
+macro_rules! size_of_vals {
+    ($x:expr) => {
+        std::mem::size_of_val(&$x)
+    };
+    ($x:expr, $($y:expr),+) => {
+        (size_of_vals!($x) + size_of_vals!($($y),+))
+    };
+}
+
 #[derive(Debug)]
 pub(crate) struct PingRequestMessageOut {
     buffer: Bytes,
@@ -43,13 +67,20 @@ impl OutgoingMessage {
     }
 }
 
-fn encode_member(member: &Member, buffer: &mut BytesMut) {
+fn encode_member(member: &Member, buffer: &mut BytesMut) -> Result<()> {
+    if buffer.remaining_mut() < (std::mem::size_of::<u8>() + size_of_vals!(member.id, member.incarnation)) {
+        return Err(format_err!("Could not encode member"));
+    }
+
     let position = buffer.len();
     buffer.put_u8(0u8);
     buffer.put_slice(member.id.as_slice());
     buffer.put_u64_be(member.incarnation);
     match member.address {
         SocketAddr::V4(address) => {
+            if buffer.remaining_mut() < size_of_vals!(address.ip().octets(), address.port()) {
+                return Err(format_err!("Could not encode member address"));
+            }
             buffer.put_slice(&address.ip().octets());
             buffer.put_u16_be(address.port());
         }
@@ -58,6 +89,7 @@ fn encode_member(member: &Member, buffer: &mut BytesMut) {
             todo!();
         }
     };
+    Ok(())
 }
 
 //pub(crate) fn encode_message_ping_request(
@@ -128,6 +160,10 @@ impl MessageTypeEncoder {
     pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<SenderEncoder> {
         self.encoder.message_type(message_type)?;
         Ok(SenderEncoder { encoder: self.encoder })
+        //        Ok(SenderEncoder2 {
+        //            buffer: self.encoder.message.buffer,
+        //            phantom: PhantomData,
+        //        })
     }
 }
 
@@ -136,10 +172,9 @@ pub(crate) struct SenderEncoder {
 }
 
 impl SenderEncoder {
-    pub(crate) fn sender(self, member: &Member) -> Result<SequenceNumberEncoder> {
-        Ok(SequenceNumberEncoder {
-            encoder: self.encoder.sender(member)?,
-        })
+    pub(crate) fn sender(mut self, member: &Member) -> Result<SequenceNumberEncoder> {
+        self.encoder.sender(member)?;
+        Ok(SequenceNumberEncoder { encoder: self.encoder })
     }
 }
 
@@ -153,6 +188,14 @@ impl SequenceNumberEncoder {
         Ok(NotificationsEncoder { encoder: self.encoder })
     }
 }
+
+//impl From<BytesMut> for SequenceNumberEncoder {
+//    fn from(_: BytesMut) -> Self {
+//        Self {
+//            encoder: DisseminationMessageEncoder::new(1024).encoder,
+//        }
+//    }
+//}
 
 pub(crate) struct NotificationsEncoder {
     encoder: DisseminationMessageEncoder,
@@ -203,9 +246,9 @@ impl DisseminationMessageEncoder {
         MessageTypeEncoder { encoder }
     }
 
-    fn sender(mut self, member: &Member) -> Result<Self> {
+    fn sender(&mut self, member: &Member) -> Result<()> {
         self.encode_member(member)?;
-        Ok(self)
+        Ok(())
     }
 
     fn message_type(&mut self, message_type: MessageType) -> Result<()> {
