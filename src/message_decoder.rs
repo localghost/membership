@@ -181,7 +181,6 @@ pub(crate) fn decode_message(buffer: &[u8]) -> Result<IncomingMessage> {
 mod test {
     use super::*;
     use bytes::{BufMut, BytesMut};
-    use rand::AsByteSliceMut;
     use std::str::FromStr;
 
     #[test]

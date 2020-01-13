@@ -3,23 +3,9 @@ use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
 use bytes::{BufMut, Bytes, BytesMut};
+use failure::_core::marker::PhantomData;
 use failure::format_err;
 use std::net::SocketAddr;
-
-//pub(crate) struct SenderEncoder2<T> {
-//    buffer: BytesMut,
-//    phantom: std::marker::PhantomData<T>,
-//}
-//
-//impl<T> SenderEncoder2<T>
-//where
-//    T: From<BytesMut>,
-//{
-//    pub(crate) fn sender(mut self, member: &Member) -> Result<T> {
-//        encode_member(member, &mut self.buffer);
-//        Ok(T::from(self.buffer))
-//    }
-//}
 
 macro_rules! size_of_vals {
     ($x:expr) => {
@@ -28,6 +14,108 @@ macro_rules! size_of_vals {
     ($x:expr, $($y:expr),+) => {
         (size_of_vals!($x) + size_of_vals!($($y),+))
     };
+}
+
+pub(crate) struct SenderEncoder<T> {
+    buffer: BytesMut,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> SenderEncoder<T>
+where
+    T: From<BytesMut>,
+{
+    pub(crate) fn sender(mut self, member: &Member) -> Result<T> {
+        encode_member(member, &mut self.buffer)?;
+        Ok(T::from(self.buffer))
+    }
+}
+
+impl<T> From<BytesMut> for SenderEncoder<T> {
+    fn from(buffer: BytesMut) -> Self {
+        Self {
+            buffer,
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct TargetEncoder<T> {
+    buffer: BytesMut,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> TargetEncoder<T>
+where
+    T: From<BytesMut>,
+{
+    pub(crate) fn target(mut self, member: &Member) -> Result<T> {
+        encode_member(member, &mut self.buffer)?;
+        Ok(T::from(self.buffer))
+    }
+}
+
+impl<T> From<BytesMut> for TargetEncoder<T> {
+    fn from(buffer: BytesMut) -> Self {
+        Self {
+            buffer,
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct MessageTypeEncoder<T> {
+    buffer: BytesMut,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> MessageTypeEncoder<T>
+where
+    T: From<BytesMut>,
+{
+    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<T> {
+        if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
+            return Err(format_err!("Could not encode message type"));
+        }
+        self.buffer.put_i32_be(message_type as i32);
+        Ok(T::from(self.buffer))
+    }
+}
+
+impl<T> From<BytesMut> for MessageTypeEncoder<T> {
+    fn from(buffer: BytesMut) -> Self {
+        Self {
+            buffer,
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct SequenceNumberEncoder<T> {
+    buffer: BytesMut,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> SequenceNumberEncoder<T>
+where
+    T: From<BytesMut>,
+{
+    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<T> {
+        if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
+            return Err(format_err!("Could not encode sequence number"));
+        }
+        self.buffer.put_u64_be(sequence_number);
+        Ok(T::from(self.buffer))
+    }
+}
+
+impl<T> From<BytesMut> for SequenceNumberEncoder<T> {
+    fn from(buffer: BytesMut) -> Self {
+        Self {
+            buffer,
+            phantom: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -121,28 +209,11 @@ pub(crate) struct PingRequestMessageEncoder {
 }
 
 impl PingRequestMessageEncoder {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new() -> SenderEncoder<SequenceNumberEncoder<TargetEncoder<Self>>> {
         // TODO: calculate exact max length as capacity
-        let mut encoder = PingRequestMessageEncoder {
-            buffer: BytesMut::with_capacity(1024),
-        };
-        encoder.buffer.put_i32_be(MessageType::PingIndirect as i32);
-        encoder
-    }
-
-    pub(crate) fn sender(mut self, member: &Member) -> Result<Self> {
-        encode_member(member, &mut self.buffer)?;
-        Ok(self)
-    }
-
-    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<Self> {
-        self.buffer.put_u64_be(sequence_number);
-        Ok(self)
-    }
-
-    pub(crate) fn target(mut self, member: &Member) -> Result<Self> {
-        encode_member(member, &mut self.buffer)?;
-        Ok(self)
+        let mut buffer = BytesMut::with_capacity(1024);
+        buffer.put_i32_be(MessageType::PingIndirect as i32);
+        SenderEncoder::<SequenceNumberEncoder<TargetEncoder<Self>>>::from(buffer)
     }
 
     pub(crate) fn encode(self) -> OutgoingMessage {
@@ -152,51 +223,57 @@ impl PingRequestMessageEncoder {
     }
 }
 
-pub(crate) struct MessageTypeEncoder {
-    buffer: BytesMut,
-}
-
-impl MessageTypeEncoder {
-    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<SenderEncoder> {
-        if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
-            return Err(format_err!("Could not encode message type"));
-        }
-        self.buffer.put_i32_be(message_type as i32);
-        Ok(SenderEncoder { buffer: self.buffer })
-        //        Ok(SenderEncoder2 {
-        //            buffer: self.encoder.message.buffer,
-        //            phantom: PhantomData,
-        //        })
+impl From<BytesMut> for PingRequestMessageEncoder {
+    fn from(buffer: BytesMut) -> Self {
+        Self { buffer }
     }
 }
 
-pub(crate) struct SenderEncoder {
-    buffer: BytesMut,
-}
-
-impl SenderEncoder {
-    pub(crate) fn sender(mut self, member: &Member) -> Result<SequenceNumberEncoder> {
-        encode_member(member, &mut self.buffer)?;
-        Ok(SequenceNumberEncoder { buffer: self.buffer })
-    }
-}
-
-pub(crate) struct SequenceNumberEncoder {
-    buffer: BytesMut,
-}
-
-impl SequenceNumberEncoder {
-    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<NotificationsEncoder> {
-        if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
-            return Err(format_err!("Could not encode sequence number"));
-        }
-        self.buffer.put_u64_be(sequence_number);
-        Ok(NotificationsEncoder {
-            buffer: self.buffer,
-            num_notifications: 0,
-        })
-    }
-}
+//pub(crate) struct MessageTypeEncoder {
+//    buffer: BytesMut,
+//}
+//
+//impl MessageTypeEncoder {
+//    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<SenderEncoder> {
+//        if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
+//            return Err(format_err!("Could not encode message type"));
+//        }
+//        self.buffer.put_i32_be(message_type as i32);
+//        Ok(SenderEncoder { buffer: self.buffer })
+//        //        Ok(SenderEncoder2 {
+//        //            buffer: self.encoder.message.buffer,
+//        //            phantom: PhantomData,
+//        //        })
+//    }
+//}
+//
+//pub(crate) struct SenderEncoder {
+//    buffer: BytesMut,
+//}
+//
+//impl SenderEncoder {
+//    pub(crate) fn sender(mut self, member: &Member) -> Result<SequenceNumberEncoder> {
+//        encode_member(member, &mut self.buffer)?;
+//        Ok(SequenceNumberEncoder { buffer: self.buffer })
+//    }
+//}
+//
+//pub(crate) struct SequenceNumberEncoder {
+//    buffer: BytesMut,
+//}
+//
+//impl SequenceNumberEncoder {
+//    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<NotificationsEncoder> {
+//        if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
+//            return Err(format_err!("Could not encode sequence number"));
+//        }
+//        self.buffer.put_u64_be(sequence_number);
+//        Ok(NotificationsEncoder {
+//            buffer: self.buffer,
+//            num_notifications: 0,
+//        })
+//    }
+//}
 
 //impl From<BytesMut> for SequenceNumberEncoder {
 //    fn from(_: BytesMut) -> Self {
@@ -265,6 +342,15 @@ impl NotificationsEncoder {
     }
 }
 
+impl From<BytesMut> for NotificationsEncoder {
+    fn from(buffer: BytesMut) -> Self {
+        Self {
+            buffer,
+            num_notifications: 0,
+        }
+    }
+}
+
 pub(crate) struct BroadcastEncoder {
     buffer: BytesMut,
     num_notifications: usize,
@@ -300,9 +386,15 @@ impl BroadcastEncoder {
 pub(crate) struct DisseminationMessageEncoder {}
 
 impl DisseminationMessageEncoder {
-    pub(crate) fn new(max_size: usize) -> MessageTypeEncoder {
-        MessageTypeEncoder {
+    pub(crate) fn new(
+        max_size: usize,
+    ) -> MessageTypeEncoder<SenderEncoder<SequenceNumberEncoder<NotificationsEncoder>>> {
+        //        MessageTypeEncoder {
+        //            buffer: BytesMut::with_capacity(max_size),
+        //        }
+        MessageTypeEncoder::<SenderEncoder<SequenceNumberEncoder<NotificationsEncoder>>> {
             buffer: BytesMut::with_capacity(max_size),
+            phantom: PhantomData,
         }
     }
 }
