@@ -2,3 +2,7 @@ language: rust
 
 rust:
   - 1.40.0
+
+script:
+  - sudo cargo build --verbose --all
+  - sudo cargo test --verbose --all
