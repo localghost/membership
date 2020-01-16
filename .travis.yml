@@ -11,4 +11,4 @@ script:
   - sudo env "PATH=$PATH" cargo test --verbose --all
 
 after_success:
-  - cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
+  - sudo env "PATH=$PATH" cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
