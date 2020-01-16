@@ -4,5 +4,5 @@ rust:
   - 1.40.0
 
 script:
-  - sudo --preserve-env=PATH cargo build --verbose --all
-  - sudo --preserve-env=PATH cargo test --verbose --all
+  - sudo -E cargo build --verbose --all
+  - sudo -E cargo test --verbose --all
