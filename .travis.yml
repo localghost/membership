@@ -3,6 +3,12 @@ language: rust
 rust:
   - 1.40.0
 
+before_cache:
+  - cargo install cargo-tarpaulin
+
 script:
   - sudo env "PATH=$PATH" cargo build --verbose --all
   - sudo env "PATH=$PATH" cargo test --verbose --all
+
+after_success:
+  - cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
