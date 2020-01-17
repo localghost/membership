@@ -106,3 +106,53 @@ fn generate_id(address: SocketAddr) -> MemberId {
     }
     MemberId(hasher.result().into())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_compare_members() {
+        let address = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let member_id1 = MemberId::try_from([1u8; 20].as_ref()).unwrap();
+        let member_id2 = MemberId::try_from([2u8; 20].as_ref()).unwrap();
+
+        assert_eq!(
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 1
+            },
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 1
+            }
+        );
+        assert_ne!(
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 1
+            },
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 2
+            }
+        );
+        assert_ne!(
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 1
+            },
+            Member {
+                address,
+                id: member_id1,
+                incarnation: 2
+            }
+        );
+    }
+}
