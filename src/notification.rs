@@ -21,8 +21,15 @@ impl PartialOrd for Notification {
         }
         match self {
             Notification::Alive { member } => match other {
-                Notification::Alive { member: other_member } | Notification::Suspect { member: other_member } => {
+                Notification::Alive { member: other_member } => {
                     member.incarnation.partial_cmp(&other_member.incarnation)
+                }
+                Notification::Suspect { member: other_member } => {
+                    if other_member.incarnation >= member.incarnation {
+                        Some(Ordering::Less)
+                    } else {
+                        Some(Ordering::Greater)
+                    }
                 }
                 Notification::Confirm { .. } => Some(Ordering::Less),
             },
@@ -56,26 +63,40 @@ impl Notification {
     }
 }
 
-//#[cfg(test)]
-//mod test {
-//    use super::*;
-//    use std::net::SocketAddr;
-//    use std::str::FromStr;
-//
-//    #[test]
-//    fn test_comparison() {
-//        let alive = Notification::Alive {
-//            member: Member {
-//                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
-//                incarnation: 1,
-//            },
-//        };
-//        let confirm = Notification::Confirm {
-//            member: Member {
-//                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
-//                incarnation: 1,
-//            },
-//        };
-//        assert!(alive < confirm);
-//    }
-//}
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::member::MemberId;
+    use std::convert::TryFrom;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_comparison() {
+        let alive = Notification::Alive {
+            member: Member {
+                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                incarnation: 1,
+                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+            },
+        };
+        let suspect = Notification::Suspect {
+            member: Member {
+                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                incarnation: 1,
+                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+            },
+        };
+        let confirm = Notification::Confirm {
+            member: Member {
+                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                incarnation: 1,
+                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+            },
+        };
+        assert!(alive < suspect);
+        assert!(suspect < confirm);
+        assert!(alive < confirm);
+        assert!(suspect > alive);
+    }
+}
