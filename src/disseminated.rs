@@ -119,4 +119,20 @@ mod test {
             disseminated.iter().cloned().collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn dissemination_limit() {
+        let mut disseminated = Disseminated::with_limit(3);
+        disseminated.add("foo");
+
+        assert_eq!(vec!["foo"], disseminated.iter().cloned().collect::<Vec<_>>());
+
+        disseminated.mark(1);
+        disseminated.mark(1);
+        disseminated.mark(1);
+        assert_eq!(vec!["foo"], disseminated.iter().cloned().collect::<Vec<_>>());
+
+        disseminated.mark(1);
+        assert_eq!(Vec::<String>::new(), disseminated.iter().cloned().collect::<Vec<_>>());
+    }
 }
