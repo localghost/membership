@@ -72,31 +72,99 @@ mod test {
     use std::str::FromStr;
 
     #[test]
-    fn test_comparison() {
+    fn test_compare_same_member_with_same_incarnation() {
+        let address = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let member_id = MemberId::try_from([0u8; 20].as_ref()).unwrap();
+
         let alive = Notification::Alive {
             member: Member {
-                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                address,
                 incarnation: 1,
-                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+                id: member_id,
             },
         };
         let suspect = Notification::Suspect {
             member: Member {
-                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                address,
                 incarnation: 1,
-                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+                id: member_id,
             },
         };
         let confirm = Notification::Confirm {
             member: Member {
-                address: SocketAddr::from_str("127.0.0.1:1234").unwrap(),
+                address,
                 incarnation: 1,
-                id: MemberId::try_from([0u8; 20].as_ref()).unwrap(),
+                id: member_id,
             },
         };
         assert!(alive < suspect);
         assert!(suspect < confirm);
         assert!(alive < confirm);
         assert!(suspect > alive);
+    }
+
+    #[test]
+    fn test_compare_same_member_with_different_incarnation() {
+        let address = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let member_id = MemberId::try_from([0u8; 20].as_ref()).unwrap();
+
+        let alive = Notification::Alive {
+            member: Member {
+                address,
+                incarnation: 3,
+                id: member_id,
+            },
+        };
+        let suspect = Notification::Suspect {
+            member: Member {
+                address,
+                incarnation: 2,
+                id: member_id,
+            },
+        };
+        let confirm = Notification::Confirm {
+            member: Member {
+                address,
+                incarnation: 1,
+                id: member_id,
+            },
+        };
+        assert!(alive > suspect);
+        assert!(suspect < confirm);
+        assert!(alive < confirm);
+        assert!(suspect < alive);
+    }
+
+    #[test]
+    fn test_compare_different_members() {
+        let address = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let member_id1 = MemberId::try_from([1u8; 20].as_ref()).unwrap();
+        let member_id2 = MemberId::try_from([2u8; 20].as_ref()).unwrap();
+        let member_id3 = MemberId::try_from([3u8; 20].as_ref()).unwrap();
+
+        let alive = Notification::Alive {
+            member: Member {
+                address,
+                incarnation: 1,
+                id: member_id1,
+            },
+        };
+        let suspect = Notification::Suspect {
+            member: Member {
+                address,
+                incarnation: 1,
+                id: member_id2,
+            },
+        };
+        let confirm = Notification::Confirm {
+            member: Member {
+                address,
+                incarnation: 1,
+                id: member_id3,
+            },
+        };
+        assert_eq!(alive.partial_cmp(&suspect), None);
+        assert_eq!(suspect.partial_cmp(&confirm), None);
+        assert_eq!(alive.partial_cmp(&confirm), None);
     }
 }
