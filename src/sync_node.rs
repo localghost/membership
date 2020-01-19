@@ -10,8 +10,6 @@ use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::ProtocolConfig;
-//use crypto::digest::Digest;
-//use crypto::sha1::Sha1;
 use failure::{format_err, ResultExt};
 use log::{debug, info, warn};
 use mio::net::UdpSocket;

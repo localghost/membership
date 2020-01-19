@@ -10,14 +10,14 @@ impl<T> Disseminated<T>
 where
     T: std::cmp::PartialEq,
 {
-    pub(crate) fn new() -> Disseminated<T> {
+    pub(crate) fn new() -> Self {
         Disseminated {
             items: Vec::new(),
             limit: None,
         }
     }
 
-    pub(crate) fn with_limit(limit: u64) -> Disseminated<T> {
+    pub(crate) fn with_limit(limit: u64) -> Self {
         let mut result = Self::new();
         result.set_limit(limit);
         result
@@ -44,6 +44,7 @@ where
 
     pub(crate) fn set_limit(&mut self, limit: u64) {
         self.limit = Some(limit);
+        self.update();
     }
 
     fn update(&mut self) {
@@ -57,8 +58,8 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use failure::_core::str::FromStr;
     use std::net::SocketAddr;
+    use std::str::FromStr;
 
     fn make_members(addresses: &[&str]) -> Vec<SocketAddr> {
         addresses
