@@ -150,8 +150,8 @@ mod test {
             },
             Member {
                 address,
-                id: member_id1,
-                incarnation: 2
+                id: member_id2,
+                incarnation: 1
             }
         );
     }

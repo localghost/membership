@@ -46,7 +46,7 @@ impl<'a> MessageDecoder<'a> {
     }
 
     fn decode_message_type(&mut self) -> Result<MessageType> {
-        let message_type = self.buffer.get_i32_be();
+        let message_type = self.buffer.get_i32();
         match message_type {
             x if x == MessageType::Ping as i32 => Ok(MessageType::Ping),
             x if x == MessageType::PingAck as i32 => Ok(MessageType::PingAck),
@@ -59,7 +59,7 @@ impl<'a> MessageDecoder<'a> {
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
             return Err(format_err!("Not enough bytes to discover message sequence number"));
         }
-        Ok(self.buffer.get_u64_be())
+        Ok(self.buffer.get_u64())
     }
 
     fn decode_notifications(&mut self) -> Result<Vec<Notification>> {
@@ -109,7 +109,7 @@ impl<'a> MessageDecoder<'a> {
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
             return Err(format_err!("Could not decode member"));
         }
-        let incarnation = self.buffer.get_u64_be();
+        let incarnation = self.buffer.get_u64();
         let address = self.decode_address(address_type)?;
         Ok(Member {
             id: member_id,
@@ -143,7 +143,7 @@ impl<'a> MessageDecoder<'a> {
                     self.buffer.get_u8(),
                     self.buffer.get_u8(),
                 )),
-                self.buffer.get_u16_be(),
+                self.buffer.get_u16(),
             ),
             1 => return Err(format_err!("Support for IPv6 is not implemented yet")),
             x => return Err(format_err!("Unsupported address type: {}", x)),
@@ -186,13 +186,13 @@ mod test {
     #[test]
     fn decode_empty_message() {
         let mut buffer = BytesMut::with_capacity(47);
-        buffer.put_i32_be(MessageType::Ping as i32); // message type
+        buffer.put_i32(MessageType::Ping as i32); // message type
         buffer.put_u8(0); // address type
         buffer.put_slice(&[0u8; 20]); // member id
-        buffer.put_u64_be(0); // incarnation number
+        buffer.put_u64(0); // incarnation number
         buffer.put_slice(&[0u8; 4]); // IP address
-        buffer.put_u16_be(0); // port
-        buffer.put_u64_be(42); // sequence number
+        buffer.put_u16(0); // port
+        buffer.put_u64(42); // sequence number
 
         match decode_message(&buffer).unwrap() {
             IncomingMessage::Ping(message) => {

@@ -23,8 +23,8 @@ impl Message {
         let mut message = Message {
             buffer: BytesMut::with_capacity(64),
         };
-        message.buffer.put_i32_be(message_type as i32);
-        message.buffer.put_u64_be(sequence_number);
+        message.buffer.put_i32(message_type as i32);
+        message.buffer.put_u64(sequence_number);
         message
     }
 
@@ -50,7 +50,7 @@ impl Message {
             match members[idx] {
                 SocketAddr::V4(sa) => {
                     self.buffer.put_slice(&(sa.ip().octets()));
-                    self.buffer.put_u16_be(sa.port());
+                    self.buffer.put_u16(sa.port());
                 }
                 SocketAddr::V6(_sa) => {
                     panic!("IPv6 is not implemented yet.");
@@ -64,7 +64,7 @@ impl Message {
     }
 
     pub(super) fn get_type(&self) -> MessageType {
-        let encoded_type = self.get_cursor_into_buffer(0).unwrap().get_i32_be();
+        let encoded_type = self.get_cursor_into_buffer(0).unwrap().get_i32();
         match encoded_type {
             x if x == MessageType::Ping as i32 => MessageType::Ping,
             x if x == MessageType::PingAck as i32 => MessageType::PingAck,
@@ -76,7 +76,7 @@ impl Message {
     pub(super) fn get_sequence_number(&self) -> u64 {
         self.get_cursor_into_buffer(std::mem::size_of::<i32>() as u64)
             .unwrap()
-            .get_u64_be()
+            .get_u64()
     }
 
     pub(super) fn get_alive_members(&self) -> Vec<SocketAddr> {
@@ -101,8 +101,8 @@ impl Message {
         for _ in 0..count {
             if (header & 1) == 0 {
                 result.push(SocketAddr::new(
-                    IpAddr::V4(Ipv4Addr::from(cursor.get_u32_be())),
-                    cursor.get_u16_be(),
+                    IpAddr::V4(Ipv4Addr::from(cursor.get_u32())),
+                    cursor.get_u16(),
                 ));
             } else {
                 panic!("IPv6 is not implemented yet.");
