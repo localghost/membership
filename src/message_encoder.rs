@@ -281,18 +281,20 @@ pub(crate) struct BroadcastEncoder {
 
 impl BroadcastEncoder {
     pub(crate) fn broadcast<'a>(mut self, members: impl Iterator<Item = &'a Member>) -> Result<Self> {
-        if !self.buffer.has_remaining_mut() {
-            return Err(format_err!("Not enough space to encode broadcast"));
+        if self.buffer.has_remaining_mut() {
+            let count_position = self.buffer.get_ref().len();
+            self.buffer.put_u8(0);
+            let mut count = 0;
+            for member in members {
+                if self.buffer.remaining_mut() < size_of_member(member) {
+                    break;
+                }
+                encode_member(member, &mut self.buffer)?;
+                count += 1;
+            }
+            self.buffer.get_mut()[count_position] = count;
+            self.num_broadcast = count as usize;
         }
-        let count_position = self.buffer.get_ref().len();
-        self.buffer.put_u8(0);
-        let mut count = 0;
-        for member in members {
-            encode_member(member, &mut self.buffer)?;
-            count += 1;
-        }
-        self.buffer.get_mut()[count_position] = count;
-        self.num_broadcast = count as usize;
         Ok(self)
     }
 
@@ -351,11 +353,12 @@ mod test {
 
     mod notifications {
         use super::*;
+        use crate::ututils::*;
 
         #[test]
         fn skip_when_empty_buffer() {
             let notifications = vec![Notification::Alive {
-                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+                member: create_member(0),
             }];
             let encoder = NotificationsEncoder::from(BytesMut::new().limit(0));
             encoder.notifications(notifications.iter()).unwrap();
@@ -364,7 +367,7 @@ mod test {
         #[test]
         fn dont_overflow_buffer() {
             let notifications = vec![Notification::Alive {
-                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+                member: create_member(0),
             }];
             let encoder = NotificationsEncoder::from(BytesMut::new().limit(1));
             let encoder = encoder.notifications(notifications.iter()).unwrap();
@@ -374,14 +377,52 @@ mod test {
         #[test]
         fn encode_notification_when_space_in_buffer() {
             let notifications = vec![Notification::Alive {
-                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+                member: create_member(0),
             }];
-            // Adding `1` as the number of notifications is stores in a single byte.
+            // Adding `1` as the number of notifications is stored in a single byte.
             let encoder = NotificationsEncoder::from(
                 BytesMut::new().limit(1 + NotificationsEncoder::size_of_notification(&notifications[0])),
             );
             let encoder = encoder.notifications(notifications.iter()).unwrap();
             assert_eq!(encoder.num_notifications, 1);
+        }
+    }
+
+    mod broadcast {
+        use super::*;
+        use crate::ututils::*;
+
+        #[test]
+        fn skip_when_empty_buffer() {
+            let encoder = BroadcastEncoder {
+                buffer: BytesMut::new().limit(0),
+                num_notifications: 0,
+                num_broadcast: 0,
+            };
+            encoder.broadcast(create_members(1).iter()).unwrap();
+        }
+
+        #[test]
+        fn dont_overflow_buffer() {
+            let encoder = BroadcastEncoder {
+                buffer: BytesMut::new().limit(1),
+                num_notifications: 0,
+                num_broadcast: 0,
+            };
+            let encoder = encoder.broadcast(create_members(1).iter()).unwrap();
+            assert_eq!(encoder.num_broadcast, 0);
+        }
+
+        #[test]
+        fn encode_broadcast_when_space_in_buffer() {
+            let members = create_members(1);
+            let encoder = BroadcastEncoder {
+                buffer: BytesMut::new().limit(1 + size_of_member(&members[0])),
+                num_notifications: 0,
+                num_broadcast: 0,
+            };
+            let encoder = encoder.broadcast(members.iter()).unwrap();
+            assert_eq!(encoder.num_broadcast, 1);
         }
     }
 }
