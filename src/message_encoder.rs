@@ -349,22 +349,39 @@ mod test {
         }
     }
 
-    #[test]
-    fn should_not_encode_notifications_into_empty_buffer() {
-        let notifications = vec![Notification::Alive {
-            member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
-        }];
-        let encoder = NotificationsEncoder::from(BytesMut::with_capacity(0).limit(0));
-        encoder.notifications(notifications.iter()).unwrap();
-    }
+    mod notifications {
+        use super::*;
 
-    #[test]
-    fn should_encode_notifications_without_overflowing_buffer() {
-        let notifications = vec![Notification::Alive {
-            member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
-        }];
-        let encoder = NotificationsEncoder::from(BytesMut::with_capacity(1).limit(1));
-        let encoder = encoder.notifications(notifications.iter()).unwrap();
-        assert_eq!(encoder.num_notifications, 0);
+        #[test]
+        fn skip_when_empty_buffer() {
+            let notifications = vec![Notification::Alive {
+                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+            }];
+            let encoder = NotificationsEncoder::from(BytesMut::new().limit(0));
+            encoder.notifications(notifications.iter()).unwrap();
+        }
+
+        #[test]
+        fn dont_overflow_buffer() {
+            let notifications = vec![Notification::Alive {
+                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+            }];
+            let encoder = NotificationsEncoder::from(BytesMut::new().limit(1));
+            let encoder = encoder.notifications(notifications.iter()).unwrap();
+            assert_eq!(encoder.num_notifications, 0);
+        }
+
+        #[test]
+        fn encode_notification_when_space_in_buffer() {
+            let notifications = vec![Notification::Alive {
+                member: Member::new(SocketAddr::from_str("127.0.0.1:1234").unwrap()),
+            }];
+            // Adding `1` as the number of notifications is stores in a single byte.
+            let encoder = NotificationsEncoder::from(
+                BytesMut::new().limit(1 + NotificationsEncoder::size_of_notification(&notifications[0])),
+            );
+            let encoder = encoder.notifications(notifications.iter()).unwrap();
+            assert_eq!(encoder.num_notifications, 1);
+        }
     }
 }
