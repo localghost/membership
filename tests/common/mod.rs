@@ -105,14 +105,13 @@ pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
         .try_for_each(|(m, a)| m.join(a))
 }
 
-pub fn join_leader(members: &mut [Node]) -> Result<(), failure::Error> {
+pub fn create_group(members: &mut [Node]) -> Result<(), failure::Error> {
     let leader = &mut members[0];
     leader.start()?;
 
     let join_address = leader.bind_address();
     members.iter_mut().skip(1).try_for_each(|m| m.join(join_address))
 }
-
 //pub fn start_memberships(addresses: &Vec<String>) -> Vec<membership::Membership> {
 //    let mut ms: Vec<membership::Membership> = Vec::new();
 //    for (index, address) in addresses.iter().enumerate() {

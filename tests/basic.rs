@@ -14,7 +14,7 @@ fn all_members_alive() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
-        join_leader(&mut members)?;
+        create_group(&mut members)?;
 
         advance_epochs(2);
 
@@ -33,7 +33,7 @@ fn dead_node_discovered() -> TestResult {
     //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
-        join_leader(&mut members)?;
+        create_group(&mut members)?;
 
         advance_epochs(2);
 
@@ -75,5 +75,51 @@ fn different_ports() -> TestResult {
         assert_eq_unordered(&[address1, address2], &node1.get_members()?);
 
         stop_members(&mut [node1, node2])
+    })
+}
+
+#[test]
+#[ignore = "Work in progress"]
+fn many_notifications() -> TestResult {
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    in_namespace(|| -> TestResult {
+        let mut init_members = create_members(5);
+        let mut members = create_members(5);
+        create_group(&mut init_members)?;
+
+        advance_epochs(5);
+
+        for member in &init_members {
+            assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
+        }
+
+        let member = init_members.pop().unwrap();
+        stop_members(&mut [member])?;
+
+        advance_epochs(1);
+
+        let mut member = members.pop().unwrap();
+        member.join(init_members[0].bind_address()).unwrap();
+        init_members.insert(0, member);
+
+        advance_epochs(1);
+
+        let member = init_members.pop().unwrap();
+        stop_members(&mut [member])?;
+
+        advance_epochs(1);
+
+        let member = init_members.pop().unwrap();
+        stop_members(&mut [member])?;
+
+        advance_epochs(5);
+
+        for member in &init_members {
+            assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
+        }
+
+        stop_members(&mut init_members)?;
+
+        Ok(())
     })
 }
