@@ -1,4 +1,5 @@
 use membership::{Node, ProtocolConfig};
+use slog::Drain;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -77,14 +78,20 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
 }
 
 pub fn create_members(num_members: u8) -> Vec<Node> {
+    let decorator = slog_term::TermDecorator::new().build();
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+    let logger = slog::Logger::root(drain, slog::o!());
+
     let addresses = create_interfaces(num_members)
         .iter()
         .map(|a| SocketAddr::from_str(&format!("{}:2345", a)).unwrap())
         .collect::<Vec<_>>();
-    let members = addresses
+    let mut members = addresses
         .iter()
         .map(|a| Node::new(*a, Default::default()))
         .collect::<Vec<_>>();
+    members.iter_mut().for_each(|m| m.set_logger(logger.clone()));
     members
 }
 

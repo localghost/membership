@@ -11,13 +11,13 @@ use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::ProtocolConfig;
 use failure::{format_err, ResultExt};
-use log::{debug, info, warn};
 use mio::net::UdpSocket;
 use mio::{Event, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{Receiver, Sender};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
+use slog::{debug, info, warn};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
@@ -100,6 +100,7 @@ pub(crate) struct SyncNode {
     rng: SmallRng,
     suspicions: VecDeque<Suspicion>,
     timeouts: Vec<Timeout<Box<dyn FnOnce(&mut SyncNode) + Send>>>,
+    logger: slog::Logger,
 }
 
 impl SyncNode {
@@ -123,9 +124,13 @@ impl SyncNode {
             rng: SmallRng::from_entropy(),
             suspicions: VecDeque::new(),
             timeouts: Vec::new(),
+            logger: slog::Logger::root(slog::Discard, slog::o!()),
         };
-        info!("My id is {:?}", gossip.myself.id);
         (gossip, sender)
+    }
+
+    pub(crate) fn set_logger(&mut self, logger: slog::Logger) {
+        self.logger = logger.new(slog::o!("id" => self.myself.id.to_string()));
     }
 
     pub(crate) fn start(&mut self) -> Result<()> {
@@ -142,12 +147,12 @@ impl SyncNode {
                 match event.token() {
                     Token(0) => {
                         if let Err(e) = self.handle_protocol_event(&event) {
-                            warn!("Failed to process protocol event: {:?}", e);
+                            slog::warn!(self.logger, "Failed to process protocol event: {:?}", e);
                         }
                     }
                     Token(1) => match self.receiver.try_recv() {
                         Ok(message) => {
-                            debug!("ChannelMessage::{:?}", message);
+                            debug!(self.logger, "ChannelMessage::{:?}", message);
                             match message {
                                 ChannelMessage::Stop => {
                                     break 'mainloop;
@@ -158,13 +163,13 @@ impl SyncNode {
                                         .cloned()
                                         .collect::<Vec<_>>();
                                     if let Err(e) = sender.send(members) {
-                                        warn!("Failed to send list of members: {:?}", e);
+                                        warn!(self.logger, "Failed to send list of members: {:?}", e);
                                     }
                                 }
                             }
                         }
                         Err(e) => {
-                            debug!("Not ready yet: {:?}", e);
+                            debug!(self.logger, "Not ready yet: {:?}", e);
                         }
                     },
                     _ => unreachable!(),
@@ -180,8 +185,8 @@ impl SyncNode {
             let now = std::time::Instant::now();
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
                 //                self.show_metrics();
-                debug!("Notifications: {:?}", self.notifications);
-                debug!("Broadcast: {:?}", self.broadcast);
+                debug!(self.logger, "Notifications: {:?}", self.notifications);
+                debug!(self.logger, "Broadcast: {:?}", self.broadcast);
 
                 self.advance_epoch();
                 last_epoch_time = now;
@@ -257,13 +262,13 @@ impl SyncNode {
             self.requests.push_front(ping);
         }
         self.epoch += 1;
-        info!("New epoch: {}", self.epoch);
+        info!(self.logger, "New epoch: {}", self.epoch);
     }
 
     fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
         match ack.request {
             Request::Init(address) => {
-                info!("Failed to join {}", address);
+                info!(self.logger, "Failed to join {}", address);
                 self.timeouts.push(Timeout {
                     when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
                     what: Box::new(|myself| myself.requests.push_front(ack.request)),
@@ -293,19 +298,19 @@ impl SyncNode {
     }
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
-        debug!("{:?} <- {:?}", target, message);
+        debug!(self.logger, "{:?} <- {:?}", target, message);
         // This can happen if this node is returning to a group before the group noticing that the node's previous
         // instance has died.
         // FIXME: this is not the best place for this, preferably it should be handled when receiving a message
         // with member ID not matching oneself.
         if target == self.myself.address {
-            debug!("Trying to send a message to myself, dropping it");
+            debug!(self.logger, "Trying to send a message to myself, dropping it");
             return;
         }
         match self.udp.as_ref().unwrap().send_to(message.buffer(), &target) {
-            Err(e) => warn!("Message to {:?} was not delivered due to {:?}", target, e),
+            Err(e) => warn!(self.logger, "Message to {:?} was not delivered due to {:?}", target, e),
             Ok(count) => {
-                debug!("Send {} bytes", count);
+                debug!(self.logger, "Send {} bytes", count);
                 if let OutgoingMessage::DisseminationMessage(ref dissemination_message) = message {
                     self.notifications.mark(dissemination_message.num_notifications());
                     self.broadcast.mark(dissemination_message.num_broadcast());
@@ -317,20 +322,20 @@ impl SyncNode {
     fn recv_letter(&mut self) -> Option<IncomingLetter> {
         match self.udp.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
             Ok((count, sender)) => {
-                debug!("Received {} bytes from {:?}", count, sender);
+                debug!(self.logger, "Received {} bytes from {:?}", count, sender);
                 let message = match decode_message(&self.recv_buffer[..count]) {
                     Ok(message) => message,
                     Err(e) => {
-                        warn!("Failed to decode from message {:#?}: {}", sender, e);
+                        warn!(self.logger, "Failed to decode from message {:#?}: {}", sender, e);
                         return None;
                     }
                 };
                 let letter = IncomingLetter { sender, message };
-                debug!("{:?}", letter);
+                debug!(self.logger, "{:?}", letter);
                 Some(letter)
             }
             Err(e) => {
-                warn!("Failed to receive letter due to {:?}", e);
+                warn!(self.logger, "Failed to receive letter due to {:?}", e);
                 None
             }
         }
@@ -344,7 +349,7 @@ impl SyncNode {
 
     fn update_member(&mut self, member: &Member) {
         if member.id != self.myself.id && self.members.insert(member.id, member.clone()).is_none() {
-            info!("Member joined: {:?}", member);
+            info!(self.logger, "Member joined: {:?}", member);
             self.ping_order.push(member.id);
             self.broadcast.add(member.id);
         }
@@ -384,14 +389,14 @@ impl SyncNode {
             Some(member) => {
                 // FIXME: Might be inefficient to check entire deq
                 if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
-                    info!("Start suspecting member {:?}", member_id);
+                    info!(self.logger, "Start suspecting member {:?}", member_id);
                     self.suspicions.push_back(Suspicion::new(member_id));
                     self.notifications.add(Notification::Suspect { member: member.clone() });
                 }
             }
             None => debug!(
-                "Trying to suspect member {:?}, which has already been removed",
-                member_id
+                self.logger,
+                "Trying to suspect member {:?}, which has already been removed", member_id
             ),
         }
     }
@@ -404,7 +409,7 @@ impl SyncNode {
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }
-            info!("Member removed: {:?}", removed_member);
+            info!(self.logger, "Member removed: {:?}", removed_member);
         }
     }
 
@@ -441,7 +446,7 @@ impl SyncNode {
             }
         } else if event.readiness().is_writable() {
             if let Some(request) = self.requests.pop_front() {
-                debug!("{:?}", request);
+                debug!(self.logger, "{:?}", request);
                 match request {
                     Request::Init(address) => {
                         let message = DisseminationMessageEncoder::new(1024)

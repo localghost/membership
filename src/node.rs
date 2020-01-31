@@ -13,6 +13,7 @@ pub struct Node {
     config: Option<ProtocolConfig>,
     sender: Option<Sender<ChannelMessage>>,
     handle: Option<std::thread::JoinHandle<Result<()>>>,
+    logger: Option<slog::Logger>,
 }
 
 impl Node {
@@ -23,7 +24,17 @@ impl Node {
             config: Some(config),
             sender: None,
             handle: None,
+            logger: None,
         }
+    }
+
+    /// Set logger.
+    pub fn set_logger(&mut self, logger: slog::Logger) {
+        assert!(
+            self.handle.is_none(),
+            "Logger can only be set before starting the node."
+        );
+        self.logger = Some(logger);
     }
 
     /// Returns bind address of this member.
@@ -39,6 +50,9 @@ impl Node {
         assert!(self.handle.is_none(), "You have already started");
 
         let (mut sync_node, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
+        if let Some(logger) = self.logger.take() {
+            sync_node.set_logger(logger)
+        }
         self.sender = Some(sender);
         self.handle = Some(
             std::thread::Builder::new()
