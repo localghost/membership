@@ -79,7 +79,6 @@ fn different_ports() -> TestResult {
 }
 
 #[test]
-#[ignore = "Work in progress"]
 fn many_notifications() -> TestResult {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {

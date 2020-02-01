@@ -243,6 +243,12 @@ impl SyncNode {
     }
 
     fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
+        // FIXME: check that the Confirm notification about the member has been published.
+        if !self.members.contains_key(&suspicion.member_id) {
+            debug!(self.logger, "Member {} already removed.", suspicion.member_id);
+            return;
+        }
+
         let confirm = Notification::Confirm {
             member: self.members[&suspicion.member_id].clone(),
         };
