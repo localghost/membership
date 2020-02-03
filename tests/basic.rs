@@ -80,32 +80,17 @@ fn different_ports() -> TestResult {
 #[test]
 fn many_notifications() -> TestResult {
     in_namespace(|| -> TestResult {
-        let logger = sloggers::terminal::TerminalLoggerBuilder::new().build().unwrap();
-
-        let mut init_members = create_members(5);
-        let mut members = create_members(5);
+        let mut init_members = create_members(10);
+        let mut members = init_members.split_off(5);
         create_group(&mut init_members)?;
 
-        slog::info!(logger, "TEST: Created group");
-
         advance_epochs(5);
-
-        slog::info!(logger, "TEST: Group after 5 epochs");
 
         for member in &init_members {
             assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
         }
 
-        slog::info!(logger, "TEST: All members compared");
-
-        slog::info!(
-            logger,
-            "TEST: Remove member {:?}",
-            init_members.last().unwrap().bind_address()
-        );
         init_members.pop().unwrap().stop()?;
-
-        slog::info!(logger, "TEST: One member stopped");
 
         advance_epochs(1);
 
@@ -113,21 +98,11 @@ fn many_notifications() -> TestResult {
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
 
-        slog::info!(
-            logger,
-            "TEST: New member joined via {:?}",
-            init_members[1].bind_address()
-        );
+        advance_epochs(2);
 
         let mut member = members.pop().unwrap();
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
-
-        slog::info!(
-            logger,
-            "TEST: New member joined via {:?}",
-            init_members[1].bind_address()
-        );
 
         advance_epochs(1);
 
@@ -135,57 +110,25 @@ fn many_notifications() -> TestResult {
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
 
-        slog::info!(
-            logger,
-            "TEST: New member joined via {:?}",
-            init_members[1].bind_address()
-        );
-
-        slog::info!(
-            logger,
-            "TEST: Remove member {:?}",
-            init_members.last().unwrap().bind_address()
-        );
         init_members.pop().unwrap().stop()?;
 
         let mut member = members.pop().unwrap();
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
-
-        slog::info!(
-            logger,
-            "TEST: New member joined via {:?}",
-            init_members[1].bind_address()
-        );
 
         advance_epochs(1);
 
-        slog::info!(
-            logger,
-            "TEST: Remove member {:?}",
-            init_members.last().unwrap().bind_address()
-        );
         init_members.pop().unwrap().stop()?;
 
         let mut member = members.pop().unwrap();
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
-
-        slog::info!(
-            logger,
-            "TEST: New member joined via {:?}",
-            init_members[1].bind_address()
-        );
 
         advance_epochs(5);
-
-        slog::info!(logger, "After advancing epoch for the last time");
 
         for member in &init_members {
             assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
         }
-
-        slog::info!(logger, "Stopping all members");
 
         stop_members(&mut init_members)?;
 

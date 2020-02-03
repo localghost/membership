@@ -67,6 +67,9 @@ impl Node {
         assert!(self.handle.is_none(), "You have already started");
 
         let (mut sync_node, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
+        if let Some(logger) = self.logger.take() {
+            sync_node.set_logger(logger)
+        }
         self.sender = Some(sender);
         self.handle = Some(
             std::thread::Builder::new()
