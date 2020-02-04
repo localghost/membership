@@ -463,7 +463,7 @@ impl SyncNode {
                         self.send_message(address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ping(ref header) => {
+                    Request::Ping(ref header) if self.members.contains_key(&header.member_id) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
@@ -474,7 +474,13 @@ impl SyncNode {
                         self.send_message(self.members[&header.member_id].address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::PingIndirect(ref header) => {
+                    Request::Ping(ref header) => {
+                        info!(
+                            self.logger,
+                            "Dropping Ping message, member {} has already been removed.", header.member_id
+                        );
+                    }
+                    Request::PingIndirect(ref header) if self.members.contains_key(&header.member_id) => {
                         let indirect_members = self
                             .members
                             .keys()
@@ -492,6 +498,12 @@ impl SyncNode {
                             Ok(())
                         })?;
                         self.acks.push(Ack::new(request));
+                    }
+                    Request::PingIndirect(ref header) => {
+                        info!(
+                            self.logger,
+                            "Dropping PingIndirect message, member {} has already been removed.", header.member_id
+                        );
                     }
                     Request::PingProxy(ref header, ..) => {
                         let message = DisseminationMessageEncoder::new(1024)
@@ -572,6 +584,8 @@ impl SyncNode {
         }));
     }
 
+    // FIXME(#32): don't store the target nor the sender, this message should be transparent for this node, e.g. target
+    // might have already been removed from the group by this node. Storing it result in the node re-joining this one.
     fn handle_indirect_ping(&mut self, message: &PingRequestMessageIn) {
         self.update_member(&message.sender);
         self.update_member(&message.target);
