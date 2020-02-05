@@ -67,13 +67,19 @@ struct PingProxyRequest {
 }
 
 #[derive(Debug)]
+struct AckIndirectRequest {
+    target: Member,
+    sequence_number: u64,
+}
+
+#[derive(Debug)]
 enum Request {
     Init(SocketAddr),
     Ping(Header),
     PingIndirect(Header),
     PingProxy(PingProxyRequest),
     Ack(Header),
-    AckIndirect(Header, MemberId),
+    AckIndirect(AckIndirectRequest),
 }
 
 #[derive(Debug)]
@@ -367,6 +373,16 @@ impl SyncNode {
     }
 
     fn update_member(&mut self, member: &Member) {
+        let confirmed = self.notifications.iter().find(|n| match n {
+            Notification::Confirm {
+                member: confirmed_member,
+            } if confirmed_member.id == member.id => true,
+            _ => false,
+        });
+        if let Some(member) = confirmed {
+            info!(self.logger, "Member {:?} has already been marked as dead", member);
+            return;
+        }
         if member.id != self.myself.id && self.members.insert(member.id, member.clone()).is_none() {
             info!(self.logger, "Member joined: {:?}", member);
             self.ping_order.push(member.id);
@@ -529,7 +545,7 @@ impl SyncNode {
                         self.send_message(pingProxy.target.address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ack(header) | Request::AckIndirect(header, ..) => {
+                    Request::Ack(header) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
                             .sender(&self.myself)?
@@ -539,6 +555,14 @@ impl SyncNode {
                             .encode();
                         self.send_message(self.members[&header.member_id].address, message);
                     }
+                    Request::AckIndirect(ack_indirect) => {
+                        let message = DisseminationMessageEncoder::new(1024)
+                            .message_type(MessageType::PingAck)?
+                            .sender(&self.myself)?
+                            .sequence_number(ack_indirect.sequence_number)?
+                            .encode();
+                        self.send_message(ack_indirect.target.address, message);
+                    }
                 }
             }
         }
@@ -546,9 +570,9 @@ impl SyncNode {
     }
 
     fn update_state(&mut self, message: &DisseminationMessageIn) {
+        self.update_notifications(message.notifications.iter());
         self.update_member(&message.sender);
         self.update_members(message.broadcast.iter());
-        self.update_notifications(message.notifications.iter());
     }
 
     fn handle_ack(&mut self, message: &DisseminationMessageIn) {
@@ -567,16 +591,14 @@ impl SyncNode {
                         continue;
                     }
                 }
-                Request::PingProxy(ref pingProxy) => {
-                    if message.sender.id == pingProxy.target.id && message.sequence_number == pingProxy.sequence_number
+                Request::PingProxy(ref ping_proxy) => {
+                    if message.sender.id == ping_proxy.target.id
+                        && message.sequence_number == ping_proxy.sequence_number
                     {
-                        self.requests.push_back(Request::AckIndirect(
-                            Header {
-                                member_id: *reply_to,
-                                sequence_number: message.sequence_number,
-                            },
-                            message.sender.id,
-                        ));
+                        self.requests.push_back(Request::AckIndirect(AckIndirectRequest {
+                            target: ping_proxy.sender.clone(),
+                            sequence_number: ping_proxy.sequence_number,
+                        }));
                         continue;
                     }
                 }
@@ -600,17 +622,11 @@ impl SyncNode {
         }));
     }
 
-    // FIXME(#32): don't store the target nor the sender, this message should be transparent for this node, e.g. target
-    // might have already been removed from the group by this node. Storing it result in the node re-joining this one.
     fn handle_indirect_ping(&mut self, message: &PingRequestMessageIn) {
-        self.update_member(&message.sender);
-        self.update_member(&message.target);
-        self.requests.push_back(Request::PingProxy(
-            Header {
-                member_id: message.target.id,
-                sequence_number: message.sequence_number,
-            },
-            message.sender.id,
-        ));
+        self.requests.push_back(Request::PingProxy(PingProxyRequest {
+            sender: message.sender.clone(),
+            target: message.target.clone(),
+            sequence_number: message.sequence_number,
+        }));
     }
 }
