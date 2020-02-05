@@ -60,11 +60,18 @@ impl Ack {
 }
 
 #[derive(Debug)]
+struct PingProxyRequest {
+    sender: Member,
+    target: Member,
+    sequence_number: u64,
+}
+
+#[derive(Debug)]
 enum Request {
     Init(SocketAddr),
     Ping(Header),
     PingIndirect(Header),
-    PingProxy(Header, MemberId),
+    PingProxy(PingProxyRequest),
     Ack(Header),
     AckIndirect(Header, MemberId),
 }
@@ -283,8 +290,14 @@ impl SyncNode {
             Request::Ping(header) => {
                 self.requests.push_back(Request::PingIndirect(header));
             }
-            Request::PingIndirect(header) | Request::PingProxy(header, ..) => {
+            Request::PingIndirect(header) => {
                 self.handle_suspect(header.member_id);
+            }
+            Request::PingProxy(request) => {
+                warn!(
+                    self.logger,
+                    "Ping proxy from {} to {} timed out", request.sender.id, request.target.id
+                );
             }
             _ => unreachable!(),
         }
@@ -505,15 +518,15 @@ impl SyncNode {
                             "Dropping PingIndirect message, member {} has already been removed.", header.member_id
                         );
                     }
-                    Request::PingProxy(ref header, ..) => {
+                    Request::PingProxy(ref pingProxy) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
-                            .sequence_number(header.sequence_number)?
+                            .sequence_number(pingProxy.sequence_number)?
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(self.members[&header.member_id].address, message);
+                        self.send_message(pingProxy.target.address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) | Request::AckIndirect(header, ..) => {
@@ -539,22 +552,24 @@ impl SyncNode {
     }
 
     fn handle_ack(&mut self, message: &DisseminationMessageIn) {
-        self.update_state(message);
         for ack in self.acks.drain(..).collect::<Vec<_>>() {
             match ack.request {
                 Request::Init(address) => {
+                    self.update_state(message);
                     if message.sender.address != address || message.sequence_number != 0 {
                         panic!("Initial ping request failed, unable to continue");
                     }
                     continue;
                 }
                 Request::PingIndirect(ref header) => {
+                    self.update_state(message);
                     if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
                         continue;
                     }
                 }
-                Request::PingProxy(ref header, ref reply_to) => {
-                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
+                Request::PingProxy(ref pingProxy) => {
+                    if message.sender.id == pingProxy.target.id && message.sequence_number == pingProxy.sequence_number
+                    {
                         self.requests.push_back(Request::AckIndirect(
                             Header {
                                 member_id: *reply_to,
@@ -566,6 +581,7 @@ impl SyncNode {
                     }
                 }
                 Request::Ping(ref header) => {
+                    self.update_state(message);
                     if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
                         continue;
                     }
