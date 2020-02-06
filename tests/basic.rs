@@ -11,7 +11,6 @@ type TestResult = std::result::Result<(), failure::Error>;
 
 #[test]
 fn all_members_alive() -> TestResult {
-    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
         create_group(&mut members)?;
@@ -30,7 +29,6 @@ fn all_members_alive() -> TestResult {
 
 #[test]
 fn dead_node_discovered() -> TestResult {
-    //    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     in_namespace(|| -> TestResult {
         let mut members = create_members(3);
         create_group(&mut members)?;
@@ -80,10 +78,9 @@ fn different_ports() -> TestResult {
 
 #[test]
 fn many_notifications() -> TestResult {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     in_namespace(|| -> TestResult {
-        let mut init_members = create_members(5);
-        let mut members = create_members(5);
+        let mut init_members = create_members(10);
+        let mut members = init_members.split_off(5);
         create_group(&mut init_members)?;
 
         advance_epochs(5);
@@ -92,24 +89,39 @@ fn many_notifications() -> TestResult {
             assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
         }
 
-        let member = init_members.pop().unwrap();
-        stop_members(&mut [member])?;
+        init_members.pop().unwrap().stop()?;
 
         advance_epochs(1);
 
         let mut member = members.pop().unwrap();
-        member.join(init_members[0].bind_address()).unwrap();
+        member.join(init_members[1].bind_address()).unwrap();
+        init_members.insert(0, member);
+
+        advance_epochs(2);
+
+        let mut member = members.pop().unwrap();
+        member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
 
         advance_epochs(1);
 
-        let member = init_members.pop().unwrap();
-        stop_members(&mut [member])?;
+        let mut member = members.pop().unwrap();
+        member.join(init_members[1].bind_address()).unwrap();
+        init_members.insert(0, member);
+
+        init_members.pop().unwrap().stop()?;
+
+        let mut member = members.pop().unwrap();
+        member.join(init_members[1].bind_address()).unwrap();
+        init_members.insert(0, member);
 
         advance_epochs(1);
 
-        let member = init_members.pop().unwrap();
-        stop_members(&mut [member])?;
+        init_members.pop().unwrap().stop()?;
+
+        let mut member = members.pop().unwrap();
+        member.join(init_members[1].bind_address()).unwrap();
+        init_members.insert(0, member);
 
         advance_epochs(5);
 
