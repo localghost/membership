@@ -124,7 +124,7 @@ impl SyncNode {
             udp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
-            notifications: Disseminated::with_limit(1),
+            notifications: Disseminated::with_limit(10),
             members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
@@ -373,6 +373,7 @@ impl SyncNode {
     }
 
     fn update_member(&mut self, member: &Member) {
+        // FIXME(#33): re-write the check
         let confirmed = self.notifications.iter().find(|n| match n {
             Notification::Confirm {
                 member: confirmed_member,
