@@ -124,7 +124,7 @@ impl SyncNode {
             udp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
-            notifications: Disseminated::with_limit(10),
+            notifications: Disseminated::with_limit(20),
             members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
