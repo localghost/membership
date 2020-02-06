@@ -535,15 +535,15 @@ impl SyncNode {
                             "Dropping PingIndirect message, member {} has already been removed.", header.member_id
                         );
                     }
-                    Request::PingProxy(ref pingProxy) => {
+                    Request::PingProxy(ref ping_proxy) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
-                            .sequence_number(pingProxy.sequence_number)?
+                            .sequence_number(ping_proxy.sequence_number)?
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(pingProxy.target.address, message);
+                        self.send_message(ping_proxy.target.address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {

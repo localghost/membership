@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 mod common;
 use crate::common::*;
-use sloggers::Build;
 
 type TestResult = std::result::Result<(), failure::Error>;
 
