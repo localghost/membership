@@ -123,7 +123,7 @@ fn many_notifications() -> TestResult {
         member.join(init_members[1].bind_address()).unwrap();
         init_members.insert(0, member);
 
-        advance_epochs(5);
+        advance_epochs(10);
 
         for member in &init_members {
             assert_eq_unordered(&get_members_addresses(&init_members), &member.get_members()?);
