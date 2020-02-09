@@ -102,6 +102,7 @@ pub(crate) struct SyncNode {
     broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
     members: HashMap<MemberId, Member>,
+    dead_members: HashMap<MemberId, Member>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -126,6 +127,7 @@ impl SyncNode {
             broadcast: Disseminated::new(),
             notifications: Disseminated::with_limit(20),
             members: HashMap::new(),
+            dead_members: HashMap::new(),
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
@@ -269,7 +271,7 @@ impl SyncNode {
             member: self.members[&suspicion.member_id].clone(),
         });
         self.notifications.add(confirm);
-        self.remove_member(&suspicion.member_id)
+        self.handle_confirm(&self.members[&suspicion.member_id].clone())
     }
 
     fn advance_epoch(&mut self) {
@@ -373,14 +375,7 @@ impl SyncNode {
     }
 
     fn update_member(&mut self, member: &Member) {
-        // FIXME(#33): re-write the check
-        let confirmed = self.notifications.iter().find(|n| match n {
-            Notification::Confirm {
-                member: confirmed_member,
-            } if confirmed_member.id == member.id => true,
-            _ => false,
-        });
-        if let Some(member) = confirmed {
+        if self.dead_members.contains_key(&member.id) {
             info!(self.logger, "Member {:?} has already been marked as dead", member);
             return;
         }
@@ -399,7 +394,7 @@ impl SyncNode {
                 continue;
             }
             match notification {
-                Notification::Confirm { member } => self.remove_member(&member.id),
+                Notification::Confirm { member } => self.handle_confirm(member),
                 Notification::Alive { member } => self.handle_alive(member),
                 Notification::Suspect { member } => self.handle_suspect(member.id),
             }
@@ -416,6 +411,11 @@ impl SyncNode {
         }
     }
 
+    fn handle_confirm(&mut self, member: &Member) {
+        self.dead_members.insert(member.id, member.clone());
+        self.remove_member(&member.id);
+    }
+
     fn handle_alive(&mut self, member: &Member) {
         self.update_member(member);
     }
@@ -430,10 +430,7 @@ impl SyncNode {
                     self.notifications.add(Notification::Suspect { member: member.clone() });
                 }
             }
-            None => debug!(
-                self.logger,
-                "Trying to suspect member {:?}, which has already been removed", member_id
-            ),
+            None => debug!(self.logger, "Trying to suspect unknown member {:?}", member_id),
         }
     }
 
