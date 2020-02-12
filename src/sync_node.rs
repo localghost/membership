@@ -481,16 +481,17 @@ impl SyncNode {
             if let Some(request) = self.requests.pop_front() {
                 debug!(self.logger, "{:?}", request);
                 match request {
-                    Request::Init(address) => {
+                    Request::Init(target) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
                             .sequence_number(0)?
                             .encode();
-                        self.send_message(address, message);
+                        self.send_message(target, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ping(ref header) if self.members.contains_key(&header.member_id) => {
+                        let target = self.members[&header.member_id].address;
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
@@ -498,7 +499,7 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(self.members[&header.member_id].address, message);
+                        self.send_message(target, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ping(ref header) => {
@@ -516,12 +517,13 @@ impl SyncNode {
                             .cloned()
                             .collect::<Vec<_>>();
                         indirect_members.iter().try_for_each(|member_id| -> Result<()> {
+                            let target = self.members[member_id].address;
                             let message = PingRequestMessageEncoder::new()
                                 .sender(&self.myself)?
                                 .sequence_number(header.sequence_number)?
                                 .target(&self.members[&header.member_id])?
                                 .encode();
-                            self.send_message(self.members[member_id].address, message);
+                            self.send_message(target, message);
                             Ok(())
                         })?;
                         self.acks.push(Ack::new(request));
@@ -533,6 +535,7 @@ impl SyncNode {
                         );
                     }
                     Request::PingProxy(ref ping_proxy) => {
+                        let target = ping_proxy.target.address;
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
@@ -540,10 +543,11 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(ping_proxy.target.address, message);
+                        self.send_message(target, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ack(header) => {
+                        let target = self.members[&header.member_id].address;
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
                             .sender(&self.myself)?
@@ -551,15 +555,16 @@ impl SyncNode {
                             .notifications(self.notifications.iter())?
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
-                        self.send_message(self.members[&header.member_id].address, message);
+                        self.send_message(target, message);
                     }
                     Request::AckIndirect(ack_indirect) => {
+                        let target = ack_indirect.target.address;
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
                             .sender(&self.myself)?
                             .sequence_number(ack_indirect.sequence_number)?
                             .encode();
-                        self.send_message(ack_indirect.target.address, message);
+                        self.send_message(target, message);
                     }
                 }
             }
