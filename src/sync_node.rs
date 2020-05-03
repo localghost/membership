@@ -125,7 +125,7 @@ impl SyncNode {
             udp: None,
             ping_order: vec![],
             broadcast: Disseminated::new(),
-            notifications: Disseminated::with_limit(20),
+            notifications: Disseminated::new(),
             members: HashMap::new(),
             dead_members: HashMap::new(),
             next_member_index: 0,
@@ -258,20 +258,21 @@ impl SyncNode {
     }
 
     fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
-        // FIXME: check that the Confirm notification about the member has been published.
-        if !self.members.contains_key(&suspicion.member_id) {
-            debug!(self.logger, "Member {} already removed.", suspicion.member_id);
-            return;
+        // Check if the `suspicion` is in notifications. Assume that if it is not then
+        // the member has already been moved to a different state and this `suspicion` can be dropped.
+        let position = self
+            .notifications
+            .iter()
+            .position(|n| n.is_suspect() && *n.member() == suspicion.member);
+        if let Some(position) = position {
+            self.notifications.remove(position);
+            self.notifications.add(Notification::Confirm {
+                member: self.members[&suspicion.member.id].clone(),
+            });
+            self.handle_confirm(&self.members[&suspicion.member.id].clone())
+        } else {
+            debug!(self.logger, "Member {} already removed.", suspicion.member.id);
         }
-
-        let confirm = Notification::Confirm {
-            member: self.members[&suspicion.member_id].clone(),
-        };
-        self.notifications.remove(&Notification::Suspect {
-            member: self.members[&suspicion.member_id].clone(),
-        });
-        self.notifications.add(confirm);
-        self.handle_confirm(&self.members[&suspicion.member_id].clone())
     }
 
     fn advance_epoch(&mut self) {
@@ -405,13 +406,20 @@ impl SyncNode {
                 .cloned()
                 .collect::<Vec<_>>();
             for n in obsolete_notifications {
-                self.notifications.remove(&n);
+                self.notifications.remove_item(&n);
             }
-            self.notifications.add((*notification).clone());
+            // Suspect notification does not have a limit because it can be dropped only when it is moved to
+            // Confirm or Alive. Suspect is limited by the respective Suspicion timeout.
+            if notification.is_suspect() {
+                self.notifications.add((*notification).clone());
+            } else {
+                self.notifications.add_with_limit((*notification).clone(), 20);
+            }
         }
     }
 
     fn handle_confirm(&mut self, member: &Member) {
+        // TODO: Check there is no active Suspicion for this member. If there is, remove it.
         self.dead_members.insert(member.id, member.clone());
         self.remove_member(&member.id);
     }
@@ -424,9 +432,9 @@ impl SyncNode {
         match self.members.get(&member_id) {
             Some(member) => {
                 // FIXME: Might be inefficient to check entire deq
-                if self.suspicions.iter().find(|s| s.member_id == member_id).is_none() {
-                    info!(self.logger, "Start suspecting member {:?}", member_id);
-                    self.suspicions.push_back(Suspicion::new(member_id));
+                if self.suspicions.iter().find(|s| s.member == *member).is_none() {
+                    info!(self.logger, "Start suspecting member {:?}", member);
+                    self.suspicions.push_back(Suspicion::new(member.clone()));
                     self.notifications.add(Notification::Suspect { member: member.clone() });
                 }
             }
@@ -438,7 +446,7 @@ impl SyncNode {
         if let Some(removed_member) = self.members.remove(member_id) {
             let idx = self.ping_order.iter().position(|e| e == member_id).unwrap();
             self.ping_order.remove(idx);
-            self.broadcast.remove(member_id);
+            self.broadcast.remove_item(member_id);
             if idx <= self.next_member_index && self.next_member_index > 0 {
                 self.next_member_index -= 1;
             }

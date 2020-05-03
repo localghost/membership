@@ -19,6 +19,7 @@ failure = "0.1.5"
 rand = { version = "0.7.1", features = ["small_rng"] }
 sha-1 = "0.8.1"
 slog = "2.5.2"
+sloggers = "0.3.6"
 
 [dev-dependencies]
 libc = "0.2.0"

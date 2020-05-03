@@ -53,12 +53,20 @@ impl PartialOrd for Notification {
         }
     }
 }
+
 impl Notification {
-    fn member(&self) -> &Member {
+    pub(crate) fn member(&self) -> &Member {
         match self {
             Notification::Alive { member } | Notification::Confirm { member } | Notification::Suspect { member } => {
                 member
             }
+        }
+    }
+
+    pub(crate) fn is_suspect(&self) -> bool {
+        match *self {
+            Notification::Suspect { .. } => true,
+            _ => false,
         }
     }
 }

@@ -1,5 +1,7 @@
 use failure::Error;
 use membership::{Node, ProtocolConfig};
+use sloggers::terminal::TerminalLoggerBuilder;
+use sloggers::Build;
 use std::net::SocketAddr;
 use structopt::StructOpt;
 
@@ -45,6 +47,7 @@ fn main() -> Result<(), Error> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Options::from_args();
     let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));
+    membership.set_logger(TerminalLoggerBuilder::new().build()?);
     match config.join_address {
         Some(address) => membership.join(address),
         None => membership.start(),

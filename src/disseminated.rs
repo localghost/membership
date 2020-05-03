@@ -1,9 +1,33 @@
 #![deny(missing_docs)]
 
 #[derive(Debug)]
-pub(crate) struct Disseminated<T> {
-    items: Vec<(T, u64)>,
+struct Item<T> {
+    item: T,
+    count: u64,
     limit: Option<u64>,
+}
+
+impl<T> Item<T> {
+    fn new(item: T) -> Self {
+        Item {
+            item,
+            count: 0,
+            limit: None,
+        }
+    }
+
+    fn new_with_limit(item: T, limit: u64) -> Self {
+        Item {
+            item,
+            count: 0,
+            limit: Some(limit),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Disseminated<T> {
+    items: Vec<Item<T>>,
 }
 
 impl<T> Disseminated<T>
@@ -11,47 +35,44 @@ where
     T: std::cmp::PartialEq,
 {
     pub(crate) fn new() -> Self {
-        Disseminated {
-            items: Vec::new(),
-            limit: None,
-        }
-    }
-
-    pub(crate) fn with_limit(limit: u64) -> Self {
-        let mut result = Self::new();
-        result.set_limit(limit);
-        result
+        Disseminated { items: Vec::new() }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        self.items.iter().rev().map(|m| &m.0)
+        self.items.iter().rev().map(|i| &i.item)
     }
 
     pub(crate) fn mark(&mut self, n: usize) {
-        self.items.iter_mut().rev().take(n).for_each(|m| m.1 += 1);
+        self.items.iter_mut().rev().take(n).for_each(|i| i.count += 1);
         self.update()
     }
 
     pub(crate) fn add(&mut self, item: T) {
-        self.items.push((item, 0));
+        self.items.push(Item::new(item));
     }
 
-    pub(crate) fn remove(&mut self, item: &T) {
-        if let Some(position) = self.items.iter().position(|m| m.0 == *item) {
-            self.items.remove(position);
+    pub(crate) fn add_with_limit(&mut self, item: T, limit: u64) {
+        self.items.push(Item::new_with_limit(item, limit));
+    }
+
+    pub(crate) fn remove_item(&mut self, item: &T) -> Option<T> {
+        if let Some(position) = self.items.iter().position(|i| i.item == *item) {
+            return Some(self.remove(position));
         }
+        None
     }
 
-    pub(crate) fn set_limit(&mut self, limit: u64) {
-        self.limit = Some(limit);
-        self.update();
+    pub(crate) fn remove(&mut self, index: usize) -> T {
+        self.items.remove(index).item
     }
 
     fn update(&mut self) {
-        self.items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        if let Some(limit) = self.limit {
-            self.items = self.items.drain(..).filter(|item| item.1 <= limit).collect::<Vec<_>>();
-        }
+        self.items.sort_by(|a, b| b.count.partial_cmp(&a.count).unwrap());
+        self.items = self
+            .items
+            .drain(..)
+            .filter(|item| item.limit.is_none() || item.count <= item.limit.unwrap())
+            .collect::<Vec<_>>();
     }
 }
 
@@ -91,7 +112,7 @@ mod test {
             disseminated.iter().cloned().collect::<Vec<_>>()
         );
 
-        disseminated.remove(&make_members(&["192.168.0.1"])[0]);
+        disseminated.remove_item(&make_members(&["192.168.0.1"])[0]);
         assert_eq!(
             make_members(&["10.0.0.1", "127.0.0.1"]),
             disseminated.iter().cloned().collect::<Vec<_>>()
@@ -123,8 +144,8 @@ mod test {
 
     #[test]
     fn dissemination_limit() {
-        let mut disseminated = Disseminated::with_limit(3);
-        disseminated.add("foo");
+        let mut disseminated = Disseminated::new();
+        disseminated.add_with_limit("foo", 3);
 
         assert_eq!(vec!["foo"], disseminated.iter().cloned().collect::<Vec<_>>());
 
