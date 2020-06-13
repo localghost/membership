@@ -419,7 +419,9 @@ impl SyncNode {
     }
 
     fn handle_confirm(&mut self, member: &Member) {
-        // TODO: Check there is no active Suspicion for this member. If there is, remove it.
+        if let Some(position) = self.suspicions.iter().position(|s| s.member == *member) {
+            self.suspicions.remove(position);
+        }
         self.dead_members.insert(member.id, member.clone());
         self.remove_member(&member.id);
     }
