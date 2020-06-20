@@ -327,14 +327,6 @@ impl SyncNode {
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
         debug!(self.logger, "{:?} <- {:?}", target, message);
-        // This can happen if this node is returning to a group before the group noticing that the node's previous
-        // instance has died.
-        // FIXME: this is not the best place for this, preferably it should be handled when receiving a message
-        // with member ID not matching oneself.
-        if target == self.myself.address {
-            debug!(self.logger, "Trying to send a message to myself, dropping it");
-            return;
-        }
         match self.udp.as_ref().unwrap().send_to(message.buffer(), &target) {
             Err(e) => warn!(self.logger, "Message to {:?} was not delivered due to {:?}", target, e),
             Ok(count) => {
@@ -377,6 +369,12 @@ impl SyncNode {
 
     fn update_member(&mut self, member: &Member) {
         if member.id == self.myself.id {
+            return;
+        }
+        // This can happen if this node is returning to a group before the group noticing that the node's previous
+        // instance has died.
+        if member.address == self.myself.address {
+            warn!(self.logger, "Trying to add myself but with wrong ID {:?}", member);
             return;
         }
         if self.members.contains_key(&member.id) {
@@ -449,14 +447,17 @@ impl SyncNode {
     }
 
     fn remove_member(&mut self, member_id: &MemberId) {
-        if let Some(removed_member) = self.members.remove(member_id) {
-            let idx = self.ping_order.iter().position(|e| e == member_id).unwrap();
-            self.ping_order.remove(idx);
-            self.broadcast.remove_item(member_id);
-            if idx <= self.next_member_index && self.next_member_index > 0 {
-                self.next_member_index -= 1;
+        match self.members.remove(member_id) {
+            Some(removed_member) => {
+                let idx = self.ping_order.iter().position(|e| e == member_id).unwrap();
+                self.ping_order.remove(idx);
+                self.broadcast.remove_item(member_id);
+                if idx <= self.next_member_index && self.next_member_index > 0 {
+                    self.next_member_index -= 1;
+                }
+                info!(self.logger, "Member removed: {:?}", removed_member);
             }
-            info!(self.logger, "Member removed: {:?}", removed_member);
+            None => debug!(self.logger, "Trying to remove unknown member {:?}", member_id),
         }
     }
 
