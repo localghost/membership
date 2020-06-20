@@ -18,7 +18,7 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use slog::{debug, info, warn};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -102,7 +102,7 @@ pub(crate) struct SyncNode {
     broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
     members: HashMap<MemberId, Member>,
-    dead_members: HashMap<MemberId, Member>,
+    dead_members: HashSet<MemberId>,
     next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
@@ -127,7 +127,7 @@ impl SyncNode {
             broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
             members: HashMap::new(),
-            dead_members: HashMap::new(),
+            dead_members: HashSet::new(),
             next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
@@ -376,19 +376,23 @@ impl SyncNode {
     }
 
     fn update_member(&mut self, member: &Member) {
-        if self.dead_members.contains_key(&member.id) {
+        if member.id == self.myself.id {
+            return;
+        }
+        if self.members.contains_key(&member.id) {
+            return;
+        }
+        if self.dead_members.contains(&member.id) {
             info!(self.logger, "Member {:?} has already been marked as dead", member);
             return;
         }
-        if member.id != self.myself.id && self.members.insert(member.id, member.clone()).is_none() {
-            info!(self.logger, "Member joined: {:?}", member);
-            self.ping_order.push(member.id);
-            self.broadcast.add(member.id);
-        }
+        self.members.insert(member.id, member.clone());
+        self.ping_order.push(member.id);
+        self.broadcast.add(member.id);
+        info!(self.logger, "Member joined: {:?}", member);
     }
 
     fn update_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
-        // TODO: check this does not miss notifications with not yet seen members
         // TODO: remove from self.notifications those notifications that are overridden by the new ones
         for notification in notifications {
             if self.notifications.iter().find(|&n| n >= notification).is_some() {
@@ -422,7 +426,7 @@ impl SyncNode {
         if let Some(position) = self.suspicions.iter().position(|s| s.member == *member) {
             self.suspicions.remove(position);
         }
-        self.dead_members.insert(member.id, member.clone());
+        self.dead_members.insert(member.id);
         self.remove_member(&member.id);
     }
 
