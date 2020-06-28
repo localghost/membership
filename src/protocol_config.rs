@@ -21,6 +21,9 @@ pub struct ProtocolConfig {
 
     /// Number of seconds until failed join request will be retried.
     pub join_retry_timeout: u64,
+
+    /// Number of times a notification is disseminated to other group members.
+    pub notification_dissemination_times: u64,
 }
 
 impl Default for ProtocolConfig {
@@ -31,6 +34,7 @@ impl Default for ProtocolConfig {
             num_indirect: 3,
             suspect_timeout: 10,
             join_retry_timeout: 3,
+            notification_dissemination_times: 20,
         }
     }
 }

@@ -415,7 +415,8 @@ impl SyncNode {
             if notification.is_suspect() {
                 self.notifications.add((*notification).clone());
             } else {
-                self.notifications.add_with_limit((*notification).clone(), 20);
+                self.notifications
+                    .add_with_limit((*notification).clone(), self.config.notification_dissemination_times);
             }
         }
     }
