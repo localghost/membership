@@ -100,7 +100,7 @@ impl Node {
     pub fn get_members(&self) -> Result<Vec<SocketAddr>> {
         assert!(self.handle.is_some(), "First you have to join");
 
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         self.sender
             .as_ref()
             .unwrap()

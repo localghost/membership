@@ -85,7 +85,7 @@ enum Request {
 #[derive(Debug)]
 pub(crate) enum ChannelMessage {
     Stop,
-    GetMembers(std::sync::mpsc::Sender<Vec<SocketAddr>>),
+    GetMembers(std::sync::mpsc::SyncSender<Vec<SocketAddr>>),
 }
 
 // Unfortunately SyncNode needs to be passed explicitly, it cannot be captured by closure.
