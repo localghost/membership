@@ -1,3 +1,4 @@
+use iptables;
 use membership::{Node, ProtocolConfig};
 use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::Build;
@@ -80,7 +81,7 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
 
 pub fn create_members(num_members: u8) -> Vec<Node> {
     let logger = TerminalLoggerBuilder::new()
-        .level(sloggers::types::Severity::Info)
+        .level(sloggers::types::Severity::Debug)
         .build()
         .unwrap();
 
@@ -156,4 +157,45 @@ pub fn advance_epochs(num_epochs: u8) {
     std::thread::sleep(Duration::from_secs(
         ProtocolConfig::default().protocol_period * num_epochs as u64,
     ));
+}
+
+pub fn block_member(member: &Node) {
+    slog::info!(logger(), "blocking member: {}", member.bind_address().ip().to_string());
+
+    let ipt = iptables::new(false).unwrap();
+    assert_eq!(
+        ipt.append(
+            "filter",
+            "OUTPUT",
+            &format!("--src {} -j DROP", member.bind_address().ip().to_string()),
+        )
+        .unwrap(),
+        true
+    );
+}
+
+pub fn unblock_member(member: &Node) {
+    slog::info!(
+        logger(),
+        "unblocking member: {}",
+        member.bind_address().ip().to_string()
+    );
+
+    let ipt = iptables::new(false).unwrap();
+    assert_eq!(
+        ipt.delete(
+            "filter",
+            "OUTPUT",
+            &format!("--src {} -j DROP", member.bind_address().ip().to_string()),
+        )
+        .unwrap(),
+        true
+    );
+}
+
+fn logger() -> slog::Logger {
+    TerminalLoggerBuilder::new()
+        .level(sloggers::types::Severity::Info)
+        .build()
+        .unwrap()
 }

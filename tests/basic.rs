@@ -134,3 +134,34 @@ fn many_notifications() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore]
+fn member_unsuspected() -> TestResult {
+    in_namespace(|| -> TestResult {
+        let mut members = create_members(2);
+        create_group(&mut members)?;
+
+        advance_epochs(2);
+
+        for member in &members {
+            assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
+        }
+
+        block_member(members.first().unwrap());
+
+        advance_epochs(2);
+
+        unblock_member(members.first().unwrap());
+
+        advance_epochs(5);
+
+        for member in &members {
+            assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);
+        }
+
+        stop_members(&mut members)?;
+
+        Ok(())
+    })
+}
