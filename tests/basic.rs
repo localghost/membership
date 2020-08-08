@@ -136,7 +136,6 @@ fn many_notifications() -> TestResult {
 }
 
 #[test]
-#[ignore]
 fn member_unsuspected() -> TestResult {
     in_namespace(|| -> TestResult {
         let mut members = create_members(2);

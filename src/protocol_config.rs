@@ -32,7 +32,7 @@ impl Default for ProtocolConfig {
             protocol_period: 5,
             ack_timeout: 1,
             num_indirect: 3,
-            suspect_timeout: 10,
+            suspect_timeout: 15,
             join_retry_timeout: 3,
             notification_dissemination_times: 20,
         }

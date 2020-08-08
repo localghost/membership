@@ -300,7 +300,7 @@ impl SyncNode {
                 self.requests.push_back(Request::PingIndirect(header));
             }
             Request::PingIndirect(header) => {
-                self.handle_suspect(header.member_id);
+                self.handle_suspect_other(&self.members.get(&header.member_id).unwrap().clone());
             }
             Request::PingProxy(request) => {
                 warn!(
@@ -390,8 +390,7 @@ impl SyncNode {
         info!(self.logger, "Member joined: {:?}", member);
     }
 
-    fn update_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
-        // TODO: remove from self.notifications those notifications that are overridden by the new ones
+    fn process_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
         for notification in notifications {
             if self.notifications.iter().find(|&n| n >= notification).is_some() {
                 continue;
@@ -399,7 +398,7 @@ impl SyncNode {
             match notification {
                 Notification::Confirm { member } => self.handle_confirm(member),
                 Notification::Alive { member } => self.handle_alive(member),
-                Notification::Suspect { member } => self.handle_suspect(member.id),
+                Notification::Suspect { member } => self.handle_suspect(member),
             }
             let obsolete_notifications = self
                 .notifications
@@ -408,42 +407,80 @@ impl SyncNode {
                 .cloned()
                 .collect::<Vec<_>>();
             for n in obsolete_notifications {
-                self.notifications.remove_item(&n);
+                self.remove_notification(&n);
             }
-            // Suspect notification does not have a limit because it can be dropped only when it is moved to
-            // Confirm or Alive. Suspect is limited by the respective Suspicion timeout.
-            if notification.is_suspect() {
-                self.notifications.add((*notification).clone());
-            } else {
-                self.notifications
-                    .add_with_limit((*notification).clone(), self.config.notification_dissemination_times);
-            }
+            self.add_notification(notification.clone());
+        }
+    }
+
+    fn remove_notification(&mut self, notification: &Notification) {
+        if notification.is_suspect() {
+            self.remove_suspicion(notification.member());
+        }
+        self.notifications.remove_item(notification);
+    }
+
+    fn add_notification(&mut self, notification: Notification) {
+        // Suspect notification does not have a limit because it can be dropped only when it is moved to
+        // Confirm or Alive. Suspect is limited by the respective Suspicion timeout.
+        if notification.is_suspect() {
+            self.notifications.add(notification);
+        } else {
+            self.notifications
+                .add_with_limit(notification, self.config.notification_dissemination_times);
         }
     }
 
     fn handle_confirm(&mut self, member: &Member) {
+        self.remove_suspicion(member);
+        self.dead_members.insert(member.id);
+        self.remove_member(&member.id);
+        // TODO: start spreading Confirm notification
+    }
+
+    fn remove_suspicion(&mut self, member: &Member) {
         if let Some(position) = self.suspicions.iter().position(|s| s.member == *member) {
             self.suspicions.remove(position);
         }
-        self.dead_members.insert(member.id);
-        self.remove_member(&member.id);
     }
 
     fn handle_alive(&mut self, member: &Member) {
         self.update_member(member);
     }
 
-    fn handle_suspect(&mut self, member_id: MemberId) {
-        match self.members.get(&member_id) {
+    fn handle_suspect(&mut self, member: &Member) {
+        if member.id == self.myself.id {
+            self.handle_suspect_myself(member);
+        } else {
+            self.handle_suspect_other(member);
+        }
+    }
+
+    fn handle_suspect_myself(&mut self, suspect: &Member) {
+        if self.myself.incarnation <= suspect.incarnation {
+            self.myself.incarnation = suspect.incarnation + 1;
+            info!(
+                self.logger,
+                "I am being suspected, increasing my incarnation to {}", self.myself.incarnation
+            );
+            self.add_notification(Notification::Alive {
+                member: self.myself.clone(),
+            });
+        }
+    }
+
+    fn handle_suspect_other(&mut self, suspect: &Member) {
+        match self.members.get(&suspect.id) {
             Some(member) => {
                 // FIXME: Might be inefficient to check entire deq
                 if self.suspicions.iter().find(|s| s.member == *member).is_none() {
                     info!(self.logger, "Start suspecting member {:?}", member);
+                    let member = member.clone();
                     self.suspicions.push_back(Suspicion::new(member.clone()));
-                    self.notifications.add(Notification::Suspect { member: member.clone() });
+                    self.add_notification(Notification::Suspect { member })
                 }
             }
-            None => debug!(self.logger, "Trying to suspect unknown member {:?}", member_id),
+            None => debug!(self.logger, "Trying to suspect unknown member {:?}", suspect),
         }
     }
 
@@ -584,7 +621,7 @@ impl SyncNode {
     }
 
     fn update_state(&mut self, message: &DisseminationMessageIn) {
-        self.update_notifications(message.notifications.iter());
+        self.process_notifications(message.notifications.iter());
         self.update_member(&message.sender);
         self.update_members(message.broadcast.iter());
     }
