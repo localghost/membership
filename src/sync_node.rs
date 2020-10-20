@@ -448,6 +448,7 @@ impl SyncNode {
     }
 
     fn handle_alive(&mut self, member: &Member) {
+        self.remove_suspicion(member);
         self.update_member(member);
     }
 
