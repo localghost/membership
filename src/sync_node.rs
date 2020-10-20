@@ -377,7 +377,10 @@ impl SyncNode {
             warn!(self.logger, "Trying to add myself but with wrong ID {:?}", member);
             return;
         }
-        if self.members.contains_key(&member.id) {
+        if let Some(m) = self.members.get_mut(&member.id) {
+            if m.incarnation < member.incarnation {
+                m.incarnation = member.incarnation;
+            }
             return;
         }
         if self.dead_members.contains(&member.id) {

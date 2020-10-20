@@ -8,7 +8,7 @@ before_cache:
 
 script:
   - cargo build --verbose --all
-  - sudo env "PATH=$PATH" cargo test --verbose --all
+  - sudo env "PATH=$PATH" RUST_BACKTRACE=1 cargo test --verbose --all
 
 after_success:
   - sudo env "PATH=$PATH" cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
