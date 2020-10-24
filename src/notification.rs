@@ -137,10 +137,19 @@ mod test {
                 id: member_id,
             },
         };
+        let suspect_with_higher_incarnation = Notification::Suspect {
+            member: Member {
+                address,
+                incarnation: 3,
+                id: member_id
+            }
+        };
         assert!(alive > suspect);
         assert!(suspect < confirm);
         assert!(alive < confirm);
         assert!(suspect < alive);
+        assert!(suspect < suspect_with_higher_incarnation);
+        assert!(alive < suspect_with_higher_incarnation);
     }
 
     #[test]
