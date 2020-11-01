@@ -457,6 +457,7 @@ impl SyncNode {
             self.handle_suspect_myself(member);
         } else {
             self.handle_suspect_other(member);
+            self.update_member(member);
         }
     }
 
@@ -474,18 +475,31 @@ impl SyncNode {
     }
 
     fn handle_suspect_other(&mut self, suspect: &Member) {
-        match self.members.get(&suspect.id) {
-            Some(member) => {
-                // FIXME: Might be inefficient to check entire deq
-                if self.suspicions.iter().find(|s| s.member == *member).is_none() {
-                    info!(self.logger, "Start suspecting member {:?}", member);
-                    let member = member.clone();
-                    self.suspicions.push_back(Suspicion::new(member.clone()));
-                    self.add_notification(Notification::Suspect { member })
-                }
+        // FIXME: Might be inefficient to check entire deq
+        match self.suspicions.iter().position(|s| s.member.id == suspect.id) {
+            Some(idx) if self.suspicions[idx].member.incarnation >= suspect.incarnation => {
+                info!(
+                    self.logger,
+                    "Member {:?} is already suspected", self.suspicions[idx].member
+                );
             }
-            None => debug!(self.logger, "Trying to suspect unknown member {:?}", suspect),
+            Some(idx) => {
+                info!(
+                    self.logger,
+                    "Member {:?} suspected with lower incarnation, replacing it", self.suspicions[idx].member
+                );
+                self.suspicions.remove(idx);
+                self.suspect_member(suspect)
+            }
+            None => self.suspect_member(suspect),
         }
+    }
+
+    fn suspect_member(&mut self, suspect: &Member) {
+        info!(self.logger, "Start suspecting member {:?}", suspect);
+        let member = suspect.clone();
+        self.suspicions.push_back(Suspicion::new(suspect.clone()));
+        self.add_notification(Notification::Suspect { member });
     }
 
     fn remove_member(&mut self, member_id: &MemberId) {
@@ -625,9 +639,9 @@ impl SyncNode {
     }
 
     fn update_state(&mut self, message: &DisseminationMessageIn) {
-        self.process_notifications(message.notifications.iter());
         self.update_member(&message.sender);
         self.update_members(message.broadcast.iter());
+        self.process_notifications(message.notifications.iter());
     }
 
     fn handle_ack(&mut self, message: &DisseminationMessageIn) {
