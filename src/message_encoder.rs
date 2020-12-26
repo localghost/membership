@@ -340,16 +340,6 @@ fn size_of_member(member: &Member) -> usize {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::str::FromStr;
-
-    struct NullEncoder {
-        buffer: Limit<BytesMut>,
-    }
-    impl From<Limit<BytesMut>> for NullEncoder {
-        fn from(buffer: Limit<BytesMut>) -> Self {
-            Self { buffer }
-        }
-    }
 
     mod notifications {
         use super::*;

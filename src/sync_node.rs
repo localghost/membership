@@ -625,7 +625,7 @@ impl SyncNode {
                         self.send_message(ping_proxy.target.address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ack(header) => {
+                    Request::Ack(header) if self.members.contains_key(&header.member_id) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
                             .sender(&self.myself)?
@@ -634,6 +634,12 @@ impl SyncNode {
                             .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
                             .encode();
                         self.send_message(self.members[&header.member_id].address, message);
+                    }
+                    Request::Ack(header) => {
+                        warn!(
+                            self.logger,
+                            "Trying to send ACK {:?} to a member that has been removed", header
+                        );
                     }
                     Request::AckIndirect(ack_indirect) => {
                         let message = DisseminationMessageEncoder::new(1024)
