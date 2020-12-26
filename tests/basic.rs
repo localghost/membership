@@ -43,8 +43,13 @@ fn dead_node_discovered() -> TestResult {
         let member = members.pop().unwrap();
         stop_members(&mut [member])?;
 
-        // This includes suspicion that by default is twice the epoch.
-        advance_epochs(5);
+        // This includes suspicion that by default is triple the epoch.
+        // 1. after 5 secs other members ping each other and they don't notice the 3rd member dead
+        // 2. after 10 secs both members ping the 3rd member
+        // 3. after 11 secs no ACK comes back and both members decide to go via proxy
+        // 4. after 12 secs no ACK comes back and both members decide to start suspecting the 3rd member
+        // 5. after 27 secs suspicion timeout elapases and both members mark the 3rd one as dead
+        advance_epochs(6);
 
         for member in &members {
             assert_eq_unordered(&get_members_addresses(&members), &member.get_members()?);

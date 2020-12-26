@@ -300,7 +300,16 @@ impl SyncNode {
                 self.requests.push_back(Request::PingIndirect(header));
             }
             Request::PingIndirect(header) => {
-                self.handle_suspect_other(&self.members.get(&header.member_id).unwrap().clone());
+                if let Some(member) = self.members.get(&header.member_id) {
+                    // FIXME: it shouldn't be necessary to clone the member :/
+                    let member = member.clone();
+                    self.handle_suspect_other(&member);
+                } else {
+                    warn!(
+                        self.logger,
+                        "Trying to suspect a member that has already been removed: {}", header.member_id
+                    );
+                }
             }
             Request::PingProxy(request) => {
                 warn!(
@@ -377,6 +386,7 @@ impl SyncNode {
             warn!(self.logger, "Trying to add myself but with wrong ID {:?}", member);
             return;
         }
+        // If the node is already registered then we only update its incarnation if a higher one is spotted.
         if let Some(m) = self.members.get_mut(&member.id) {
             if m.incarnation < member.incarnation {
                 m.incarnation = member.incarnation;
@@ -387,6 +397,7 @@ impl SyncNode {
             info!(self.logger, "Member {:?} has already been marked as dead", member);
             return;
         }
+        // We only reach here if this is a first time the `member` has been spotted.
         self.members.insert(member.id, member.clone());
         self.ping_order.push(member.id);
         self.broadcast.add(member.id);
@@ -639,8 +650,7 @@ impl SyncNode {
     }
 
     fn update_state(&mut self, message: &DisseminationMessageIn) {
-        self.update_member(&message.sender);
-        self.update_members(message.broadcast.iter());
+        self.update_members(std::iter::once(&message.sender).chain(message.broadcast.iter()));
         self.process_notifications(message.notifications.iter());
     }
 
