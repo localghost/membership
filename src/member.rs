@@ -2,9 +2,9 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use sha1::{Digest, Sha1};
 //use std::cmp::Ordering;
-use failure::_core::array::TryFromSliceError;
-use failure::_core::fmt::{Error, Formatter};
+use std::array::TryFromSliceError;
 use std::convert::TryFrom;
+use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,13 +28,13 @@ impl MemberId {
 }
 
 impl std::fmt::Display for MemberId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.get_id_str())
     }
 }
 
 impl std::fmt::Debug for MemberId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.get_id_str())
     }
 }

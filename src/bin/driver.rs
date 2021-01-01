@@ -1,4 +1,3 @@
-use failure::Error;
 use membership::{Node, ProtocolConfig};
 use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::Build;
@@ -43,7 +42,7 @@ impl From<ProtocolOptions> for ProtocolConfig {
     }
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Options::from_args();
     let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));

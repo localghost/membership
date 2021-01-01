@@ -10,7 +10,7 @@ use crate::notification::Notification;
 use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::ProtocolConfig;
-use failure::{format_err, ResultExt};
+use anyhow::Context;
 use mio::net::UdpSocket;
 use mio::{Event, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{Receiver, Sender};
@@ -331,7 +331,7 @@ impl SyncNode {
             Ready::readable() | Ready::writable(),
             PollOpt::level(),
         )
-        .map_err(|e| format_err!("Failed to register UDP socket for polling: {:?}", e))
+        .with_context(|| format!("Failed to register UDP socket for polling"))
     }
 
     fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {

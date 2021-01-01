@@ -1,5 +1,5 @@
 use crate::member::Member;
-use failure::_core::cmp::Ordering;
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Notification {
@@ -141,8 +141,8 @@ mod test {
             member: Member {
                 address,
                 incarnation: 3,
-                id: member_id
-            }
+                id: member_id,
+            },
         };
         assert!(alive > suspect);
         assert!(suspect < confirm);

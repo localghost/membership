@@ -1,4 +1,4 @@
-use failure;
+use anyhow;
 use membership;
 use membership::Node;
 use std::net::SocketAddr;
@@ -7,7 +7,7 @@ use std::str::FromStr;
 mod common;
 use crate::common::*;
 
-type TestResult = std::result::Result<(), failure::Error>;
+type TestResult = anyhow::Result<()>;
 
 #[test]
 fn all_members_alive() -> TestResult {

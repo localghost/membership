@@ -3,8 +3,8 @@ use crate::member::{Member, MemberId};
 use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
+use anyhow::bail;
 use bytes::Buf;
-use failure::format_err;
 use std::convert::TryFrom;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -51,13 +51,13 @@ impl<'a> MessageDecoder<'a> {
             x if x == MessageType::Ping as i32 => Ok(MessageType::Ping),
             x if x == MessageType::PingAck as i32 => Ok(MessageType::PingAck),
             x if x == MessageType::PingIndirect as i32 => Ok(MessageType::PingIndirect),
-            x => Err(format_err!("Unsupported message type: {}", x)),
+            x => bail!("Unsupported message type: {}", x),
         }
     }
 
     fn decode_sequence_number(&mut self) -> Result<u64> {
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
-            return Err(format_err!("Not enough bytes to discover message sequence number"));
+            bail!("Not enough bytes to discover message sequence number")
         }
         Ok(self.buffer.get_u64())
     }
@@ -77,7 +77,7 @@ impl<'a> MessageDecoder<'a> {
 
     fn decode_notification(&mut self) -> Result<Notification> {
         if !self.buffer.has_remaining() {
-            return Err(format_err!("Unable to decode notification header"));
+            bail!("Unable to decode notification header");
         }
         // Notification header:
         // +-----------------+
@@ -91,14 +91,14 @@ impl<'a> MessageDecoder<'a> {
             0 => Notification::Alive { member },
             1 => Notification::Suspect { member },
             2 => Notification::Confirm { member },
-            x => return Err(format_err!("Unsupported notification: {}", x)),
+            x => bail!("Unsupported notification: {}", x),
         };
         Ok(notification)
     }
 
     fn decode_sender(&mut self) -> Result<Member> {
         if !self.buffer.has_remaining() {
-            return Err(format_err!("Could not decode sender"));
+            bail!("Could not decode sender")
         }
         self.decode_member()
     }
@@ -107,7 +107,7 @@ impl<'a> MessageDecoder<'a> {
         let address_type = self.buffer.get_u8();
         let member_id = self.decode_member_id()?;
         if self.buffer.remaining() < std::mem::size_of::<u64>() {
-            return Err(format_err!("Could not decode member"));
+            bail!("Could not decode member")
         }
         let incarnation = self.buffer.get_u64();
         let address = self.decode_address(address_type)?;
@@ -120,7 +120,7 @@ impl<'a> MessageDecoder<'a> {
 
     fn decode_member_id(&mut self) -> Result<MemberId> {
         if self.buffer.remaining() < std::mem::size_of::<MemberId>() {
-            return Err(format_err!("Could not decode member id"));
+            bail!("Could not decode member id")
         }
         let member_id = MemberId::try_from(
             &self.buffer.get_ref()
@@ -133,7 +133,7 @@ impl<'a> MessageDecoder<'a> {
     fn decode_address(&mut self, address_type: u8) -> Result<SocketAddr> {
         // FIXME: The first value should depend on the `address_type`.
         if self.buffer.remaining() < (std::mem::size_of::<u32>() + std::mem::size_of::<u16>()) {
-            return Err(format_err!("Could not decode member address"));
+            bail!("Could not decode member address")
         }
         let address = match address_type {
             0 => SocketAddr::new(
@@ -145,8 +145,8 @@ impl<'a> MessageDecoder<'a> {
                 )),
                 self.buffer.get_u16(),
             ),
-            1 => return Err(format_err!("Support for IPv6 is not implemented yet")),
-            x => return Err(format_err!("Unsupported address type: {}", x)),
+            1 => bail!("Support for IPv6 is not implemented yet"),
+            x => bail!("Unsupported address type: {}", x),
         };
         Ok(address)
     }
@@ -165,7 +165,7 @@ impl<'a> MessageDecoder<'a> {
 
     fn decode_target(&mut self) -> Result<Member> {
         if !self.buffer.has_remaining() {
-            return Err(format_err!("Could not decode ping request target"));
+            bail!("Could not decode ping request target")
         }
         self.decode_member()
     }

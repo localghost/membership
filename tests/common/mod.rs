@@ -56,11 +56,11 @@ pub fn unshare_netns() {
         .success());
 }
 
-pub fn in_namespace<F>(code: F) -> Result<(), failure::Error>
+pub fn in_namespace<F>(code: F) -> anyhow::Result<()>
 where
-    F: FnOnce() -> Result<(), failure::Error> + Send + 'static,
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
 {
-    std::thread::spawn(|| -> Result<(), failure::Error> {
+    std::thread::spawn(|| -> anyhow::Result<()> {
         unshare_netns();
 
         code()
@@ -99,7 +99,7 @@ pub fn create_members(num_members: u8) -> Vec<Node> {
 
 // FIXME: doesn't work for now, a member that other member wants to join to may not have been started yet.
 #[allow(dead_code)]
-pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
+pub fn join_neighbours(members: &mut [Node]) -> anyhow::Result<()> {
     let join_addresses = members
         .iter()
         .skip(2)
@@ -114,7 +114,7 @@ pub fn join_neighbours(members: &mut [Node]) -> Result<(), failure::Error> {
         .try_for_each(|(m, a)| m.join(a))
 }
 
-pub fn create_group(members: &mut [Node]) -> Result<(), failure::Error> {
+pub fn create_group(members: &mut [Node]) -> anyhow::Result<()> {
     let leader = &mut members[0];
     leader.start()?;
 
@@ -146,7 +146,7 @@ where
     assert_eq!(s1.iter().collect::<HashSet<_>>(), s2.iter().collect::<HashSet<_>>())
 }
 
-pub fn stop_members(mss: &mut [membership::Node]) -> Result<(), failure::Error> {
+pub fn stop_members(mss: &mut [membership::Node]) -> anyhow::Result<()> {
     for ms in mss {
         ms.stop()?;
     }

@@ -2,10 +2,10 @@ use crate::member::Member;
 use crate::message::MessageType;
 use crate::notification::Notification;
 use crate::result::Result;
+use anyhow::bail;
 use bytes::buf::ext::{BufMutExt, Limit};
 use bytes::{BufMut, Bytes, BytesMut};
-use failure::_core::marker::PhantomData;
-use failure::format_err;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 
 macro_rules! size_of_vals {
@@ -151,7 +151,7 @@ where
 {
     pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<T> {
         if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
-            return Err(format_err!("Could not encode message type"));
+            bail!("Could not encode message type")
         }
         self.buffer.put_i32(message_type as i32);
         Ok(T::from(self.buffer))
@@ -178,7 +178,7 @@ where
 {
     pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<T> {
         if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
-            return Err(format_err!("Could not encode sequence number"));
+            bail!("Could not encode sequence number")
         }
         self.buffer.put_u64(sequence_number);
         Ok(T::from(self.buffer))
@@ -235,7 +235,7 @@ impl NotificationsEncoder {
 
     fn encode_notification(&mut self, notification: &Notification) -> Result<()> {
         if self.buffer.remaining_mut() < 1 {
-            return Err(format_err!("Could not encode notification type"));
+            bail!("Could not encode notification type")
         }
         match notification {
             Notification::Alive { member } => {
@@ -309,7 +309,7 @@ impl BroadcastEncoder {
 
 fn encode_member(member: &Member, buffer: &mut Limit<BytesMut>) -> Result<()> {
     if buffer.remaining_mut() < size_of_member(member) {
-        return Err(format_err!("Could not encode member"));
+        bail!("Could not encode member")
     }
     let position = buffer.get_ref().len();
     buffer.put_u8(0u8);

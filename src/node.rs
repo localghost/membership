@@ -3,7 +3,7 @@
 use crate::result::Result;
 use crate::sync_node::{ChannelMessage, SyncNode};
 use crate::ProtocolConfig;
-use failure::format_err;
+use anyhow::{anyhow, Context};
 use mio_extras::channel::Sender;
 use std::net::SocketAddr;
 
@@ -90,7 +90,7 @@ impl Node {
             .as_ref()
             .unwrap()
             .send(ChannelMessage::Stop)
-            .map_err(|e| format_err!("Failed to stop message: {:?}", e))?;
+            .with_context(|| format!("Failed to stop message"))?;
         self.wait()
     }
 
@@ -105,10 +105,8 @@ impl Node {
             .as_ref()
             .unwrap()
             .send(ChannelMessage::GetMembers(sender))
-            .map_err(|e| format_err!("Failed to ask for members: {:?}", e))?;
-        receiver
-            .recv()
-            .map_err(|e| format_err!("Failed to get members: {:?}", e))
+            .with_context(|| format!("Failed to ask for members"))?;
+        receiver.recv().with_context(|| format!("Failed to get members"))
     }
 
     #[doc(hidden)]
@@ -119,6 +117,6 @@ impl Node {
             .take()
             .unwrap()
             .join()
-            .map_err(|e| format_err!("Membership thread panicked: {:?}", e))?
+            .map_err(|e| anyhow!("Membership thread panicked: {:?}", e))?
     }
 }

@@ -15,7 +15,7 @@ structopt = "0.2.15"
 bytes = "0.5.3"
 log = "0.4.6"
 env_logger = "0.6.1"
-failure = "0.1.5"
+anyhow = "1.0.37"
 rand = { version = "0.7.1", features = ["small_rng"] }
 sha-1 = "0.8.1"
 slog = "2.5.2"

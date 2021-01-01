@@ -39,7 +39,7 @@ impl DisseminatedMembers {
 #[cfg(test)]
 mod test {
     use super::*;
-    use failure::_core::str::FromStr;
+    use std::str::FromStr;
 
     fn make_members(addresses: &[&str]) -> Vec<SocketAddr> {
         addresses
