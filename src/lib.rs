@@ -8,8 +8,8 @@
 //! ```
 //! use membership::{Node, ProtocolConfig};
 //! use std::net::SocketAddr;
-//! use failure::_core::str::FromStr;
-//! use failure::_core::time::Duration;
+//! use std::time::Duration;
+//! use std::str::FromStr;
 //!
 //! let mut ms1 = Node::new(SocketAddr::from_str("127.0.0.1:2345").unwrap(), Default::default());
 //! let mut ms2 = Node::new(SocketAddr::from_str("127.0.0.1:3456").unwrap(), Default::default());
