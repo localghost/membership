@@ -3,6 +3,7 @@
 use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
 use crate::member::{Member, MemberId};
+use crate::members::Members;
 use crate::message::MessageType;
 use crate::message_decoder::decode_message;
 use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
@@ -14,11 +15,8 @@ use anyhow::Context;
 use mio::net::UdpSocket;
 use mio::{Event, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{Receiver, Sender};
-use rand::rngs::SmallRng;
-use rand::seq::SliceRandom;
-use rand::SeedableRng;
 use slog::{debug, info, warn};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -98,12 +96,7 @@ struct Timeout<F: FnOnce(&mut SyncNode)> {
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
     udp: Option<UdpSocket>,
-    ping_order: Vec<MemberId>,
-    broadcast: Disseminated<MemberId>,
     notifications: Disseminated<Notification>,
-    members: HashMap<MemberId, Member>,
-    dead_members: HashSet<MemberId>,
-    next_member_index: usize,
     epoch: u64,
     sequence_number: u64,
     recv_buffer: Vec<u8>,
@@ -111,10 +104,10 @@ pub(crate) struct SyncNode {
     requests: VecDeque<Request>,
     receiver: Receiver<ChannelMessage>,
     acks: Vec<Ack>,
-    rng: SmallRng,
     suspicions: VecDeque<Suspicion>,
     timeouts: Vec<Timeout<Box<dyn FnOnce(&mut SyncNode) + Send>>>,
     logger: slog::Logger,
+    members: Members,
 }
 
 impl SyncNode {
@@ -123,12 +116,7 @@ impl SyncNode {
         let gossip = SyncNode {
             config,
             udp: None,
-            ping_order: vec![],
-            broadcast: Disseminated::new(),
             notifications: Disseminated::new(),
-            members: HashMap::new(),
-            dead_members: HashSet::new(),
-            next_member_index: 0,
             epoch: 0,
             sequence_number: 0,
             recv_buffer: vec![0u8; 1500],
@@ -136,10 +124,10 @@ impl SyncNode {
             requests: VecDeque::<Request>::with_capacity(32),
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
-            rng: SmallRng::from_entropy(),
             suspicions: VecDeque::new(),
             timeouts: Vec::new(),
             logger: slog::Logger::root(slog::Discard, slog::o!()),
+            members: Members::new(),
         };
         (gossip, sender)
     }
@@ -174,7 +162,7 @@ impl SyncNode {
                                 }
                                 ChannelMessage::GetMembers(sender) => {
                                     let members = std::iter::once(&self.myself.address)
-                                        .chain(self.members.values().map(|m| &m.address))
+                                        .chain(self.members.iter().map(|m| &m.address))
                                         .cloned()
                                         .collect::<Vec<_>>();
                                     if let Err(e) = sender.send(members) {
@@ -199,10 +187,6 @@ impl SyncNode {
 
             let now = std::time::Instant::now();
             if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
-                //                self.show_metrics();
-                debug!(self.logger, "Notifications: {:?}", self.notifications);
-                debug!(self.logger, "Broadcast: {:?}", self.broadcast);
-
                 self.advance_epoch();
                 last_epoch_time = now;
             }
@@ -262,21 +246,21 @@ impl SyncNode {
         // the member has already been moved to a different state and this `suspicion` can be dropped.
         let position = self
             .notifications
-            .iter()
+            .for_dissemination()
             .position(|n| n.is_suspect() && *n.member() == suspicion.member);
         if let Some(position) = position {
             self.notifications.remove(position);
             self.notifications.add(Notification::Confirm {
-                member: self.members[&suspicion.member.id].clone(),
+                member: self.members.get(&suspicion.member.id).unwrap().clone(),
             });
-            self.handle_confirm(&self.members[&suspicion.member.id].clone())
+            self.handle_confirm(&self.members.get(&suspicion.member.id).unwrap().clone())
         } else {
             debug!(self.logger, "Member {} already removed.", suspicion.member.id);
         }
     }
 
     fn advance_epoch(&mut self) {
-        if let Some(member_id) = self.get_next_member() {
+        if let Some(member_id) = self.members.next() {
             let ping = Request::Ping(Header {
                 member_id,
                 sequence_number: self.get_next_sequence_number(),
@@ -340,10 +324,6 @@ impl SyncNode {
             Err(e) => warn!(self.logger, "Message to {:?} was not delivered due to {:?}", target, e),
             Ok(count) => {
                 debug!(self.logger, "Send {} bytes", count);
-                if let OutgoingMessage::DisseminationMessage(ref dissemination_message) = message {
-                    self.notifications.mark(dissemination_message.num_notifications());
-                    self.broadcast.mark(dissemination_message.num_broadcast());
-                }
             }
         }
     }
@@ -386,22 +366,10 @@ impl SyncNode {
             warn!(self.logger, "Trying to add myself but with wrong ID {:?}", member);
             return;
         }
-        // If the node is already registered then we only update its incarnation if a higher one is spotted.
-        if let Some(m) = self.members.get_mut(&member.id) {
-            if m.incarnation < member.incarnation {
-                m.incarnation = member.incarnation;
-            }
-            return;
+        match self.members.add_or_update(member.clone()) {
+            Ok(_) => info!(self.logger, "Member joined: {:?}", member),
+            Err(e) => warn!(self.logger, "Adding new member failed due to: {}", e),
         }
-        if self.dead_members.contains(&member.id) {
-            info!(self.logger, "Member {:?} has already been marked as dead", member);
-            return;
-        }
-        // We only reach here if this is a first time the `member` has been spotted.
-        self.members.insert(member.id, member.clone());
-        self.ping_order.push(member.id);
-        self.broadcast.add(member.id);
-        info!(self.logger, "Member joined: {:?}", member);
     }
 
     fn process_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
@@ -416,7 +384,7 @@ impl SyncNode {
             }
             let obsolete_notifications = self
                 .notifications
-                .iter()
+                .for_dissemination()
                 .filter(|&n| n < notification)
                 .cloned()
                 .collect::<Vec<_>>();
@@ -447,9 +415,10 @@ impl SyncNode {
 
     fn handle_confirm(&mut self, member: &Member) {
         self.remove_suspicion(member);
-        self.dead_members.insert(member.id);
-        self.remove_member(&member.id);
-        // TODO: start spreading Confirm notification
+        match self.members.remove(&member.id) {
+            Ok(_) => info!(self.logger, "Member {:?} removed", member),
+            Err(e) => warn!(self.logger, "Member {:?} was not removed due to: {}", member, e),
+        }
     }
 
     fn remove_suspicion(&mut self, member: &Member) {
@@ -513,37 +482,6 @@ impl SyncNode {
         self.add_notification(Notification::Suspect { member });
     }
 
-    fn remove_member(&mut self, member_id: &MemberId) {
-        match self.members.remove(member_id) {
-            Some(removed_member) => {
-                let idx = self.ping_order.iter().position(|e| e == member_id).unwrap();
-                self.ping_order.remove(idx);
-                self.broadcast.remove_item(member_id);
-                if idx <= self.next_member_index && self.next_member_index > 0 {
-                    self.next_member_index -= 1;
-                }
-                info!(self.logger, "Member removed: {:?}", removed_member);
-            }
-            None => debug!(self.logger, "Trying to remove unknown member {:?}", member_id),
-        }
-    }
-
-    fn get_next_member(&mut self) -> Option<MemberId> {
-        if self.ping_order.is_empty() {
-            return None;
-        }
-        // Following SWIM paper, section 4.3, next member to probe is picked in round-robin fashion, with all
-        // the members randomly shuffled after each one has been probed.
-        // FIXME: one thing that is missing is that new members are always added at the end instead of at uniformly
-        // random position.
-        if self.next_member_index == 0 {
-            self.ping_order.shuffle(&mut self.rng);
-        }
-        let target = self.ping_order[self.next_member_index];
-        self.next_member_index = (self.next_member_index + 1) % self.ping_order.len();
-        Some(target)
-    }
-
     fn get_next_sequence_number(&mut self) -> u64 {
         let sequence_number = self.sequence_number;
         self.sequence_number += 1;
@@ -572,15 +510,15 @@ impl SyncNode {
                         self.send_message(address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ping(ref header) if self.members.contains_key(&header.member_id) => {
+                    Request::Ping(ref header) if self.members.has(&header.member_id) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
                             .sequence_number(header.sequence_number)?
-                            .notifications(self.notifications.iter())?
-                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
+                            .notifications(self.notifications.for_dissemination())?
+                            .broadcast(self.members.for_broadcast())?
                             .encode();
-                        self.send_message(self.members[&header.member_id].address, message);
+                        self.send_message(self.members.get(&header.member_id).unwrap().address, message);
                         self.acks.push(Ack::new(request));
                     }
                     Request::Ping(ref header) => {
@@ -589,21 +527,21 @@ impl SyncNode {
                             "Dropping Ping message, member {} has already been removed.", header.member_id
                         );
                     }
-                    Request::PingIndirect(ref header) if self.members.contains_key(&header.member_id) => {
+                    Request::PingIndirect(ref header) if self.members.has(&header.member_id) => {
                         let indirect_members = self
                             .members
-                            .keys()
-                            .filter(|&key| *key != header.member_id)
+                            .iter()
+                            .map(|m| m.id)
+                            .filter(|key| *key != header.member_id)
                             .take(self.config.num_indirect as usize)
-                            .cloned()
                             .collect::<Vec<_>>();
                         indirect_members.iter().try_for_each(|member_id| -> Result<()> {
                             let message = PingRequestMessageEncoder::new()
                                 .sender(&self.myself)?
                                 .sequence_number(header.sequence_number)?
-                                .target(&self.members[&header.member_id])?
+                                .target(&self.members.get(&header.member_id).unwrap())?
                                 .encode();
-                            self.send_message(self.members[member_id].address, message);
+                            self.send_message(self.members.get(member_id).unwrap().address, message);
                             Ok(())
                         })?;
                         self.acks.push(Ack::new(request));
@@ -619,21 +557,21 @@ impl SyncNode {
                             .message_type(MessageType::Ping)?
                             .sender(&self.myself)?
                             .sequence_number(ping_proxy.sequence_number)?
-                            .notifications(self.notifications.iter())?
-                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
+                            .notifications(self.notifications.for_dissemination())?
+                            .broadcast(self.members.for_broadcast())?
                             .encode();
                         self.send_message(ping_proxy.target.address, message);
                         self.acks.push(Ack::new(request));
                     }
-                    Request::Ack(header) if self.members.contains_key(&header.member_id) => {
+                    Request::Ack(header) if self.members.has(&header.member_id) => {
                         let message = DisseminationMessageEncoder::new(1024)
                             .message_type(MessageType::PingAck)?
                             .sender(&self.myself)?
                             .sequence_number(header.sequence_number)?
-                            .notifications(self.notifications.iter())?
-                            .broadcast(self.broadcast.iter().map(|id| &self.members[id]))?
+                            .notifications(self.notifications.for_dissemination())?
+                            .broadcast(self.members.for_broadcast())?
                             .encode();
-                        self.send_message(self.members[&header.member_id].address, message);
+                        self.send_message(self.members.get(&header.member_id).unwrap().address, message);
                     }
                     Request::Ack(header) => {
                         warn!(

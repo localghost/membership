@@ -33,6 +33,7 @@ mod disseminated;
 mod incoming_message;
 mod least_disseminated_members;
 mod member;
+mod members;
 mod message;
 mod message_decoder;
 mod message_encoder;

@@ -25,6 +25,27 @@ impl<T> Item<T> {
     }
 }
 
+struct DisseminatedIter<'a, T: 'a, I: Iterator<Item = &'a mut Item<T>>> {
+    items: I,
+}
+
+impl<'a, T: 'a, I: Iterator<Item = &'a mut Item<T>>> DisseminatedIter<'a, T, I> {
+    fn new(items: I) -> Self {
+        Self { items }
+    }
+}
+
+impl<'a, T, I: Iterator<Item = &'a mut Item<T>>> Iterator for DisseminatedIter<'a, T, I> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.items.next().map(|i| {
+            i.count += 1;
+            &i.item
+        })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Disseminated<T> {
     items: Vec<Item<T>>,
@@ -38,13 +59,13 @@ where
         Disseminated { items: Vec::new() }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        self.items.iter().rev().map(|i| &i.item)
+    pub(crate) fn for_dissemination(&mut self) -> impl Iterator<Item = &T> {
+        self.update();
+        DisseminatedIter::new(self.items.iter_mut().rev())
     }
 
-    pub(crate) fn mark(&mut self, n: usize) {
-        self.items.iter_mut().rev().take(n).for_each(|i| i.count += 1);
-        self.update()
+    pub(crate) fn iter(&mut self) -> impl Iterator<Item = &T> {
+        self.items.iter().rev().map(|i| &i.item)
     }
 
     pub(crate) fn add(&mut self, item: T) {
@@ -71,7 +92,7 @@ where
         self.items = self
             .items
             .drain(..)
-            .filter(|item| item.limit.is_none() || item.count <= item.limit.unwrap())
+            .filter(|item| item.limit.is_none() || item.count < item.limit.unwrap())
             .collect::<Vec<_>>();
     }
 }
@@ -97,7 +118,7 @@ mod test {
 
         assert_eq!(
             make_members(&["10.0.0.1", "192.168.0.1", "127.0.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
         );
     }
 
@@ -109,13 +130,13 @@ mod test {
 
         assert_eq!(
             make_members(&["10.0.0.1", "192.168.0.1", "127.0.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
         );
 
         disseminated.remove_item(&make_members(&["192.168.0.1"])[0]);
         assert_eq!(
             make_members(&["10.0.0.1", "127.0.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
         );
     }
 
@@ -125,20 +146,32 @@ mod test {
         let mut disseminated = Disseminated::new();
         members.iter().for_each(|m| disseminated.add(*m));
 
-        disseminated.mark(1);
         assert_eq!(
-            make_members(&["192.168.0.1", "127.0.0.1", "10.0.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            make_members(&["10.0.0.1"]),
+            disseminated.for_dissemination().take(1).cloned().collect::<Vec<_>>()
         );
-        disseminated.mark(1);
         assert_eq!(
-            make_members(&["127.0.0.1", "192.168.0.1", "10.0.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            make_members(&["192.168.0.1"]),
+            disseminated.for_dissemination().take(1).cloned().collect::<Vec<_>>()
         );
-        disseminated.mark(2);
         assert_eq!(
-            make_members(&["127.0.0.1", "10.0.0.1", "192.168.0.1"]),
-            disseminated.iter().cloned().collect::<Vec<_>>()
+            make_members(&["127.0.0.1"]),
+            disseminated.for_dissemination().take(1).cloned().collect::<Vec<_>>()
+        );
+        // All has been disseminated once so internal sorting does not re-order them as the order
+        // is determined by the number of times an item has been hand out from the container and
+        // not by when it was handed out.
+        assert_eq!(
+            make_members(&["127.0.0.1"]),
+            disseminated.for_dissemination().take(1).cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            make_members(&["192.168.0.1", "10.0.0.1"]),
+            disseminated.for_dissemination().take(2).cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            make_members(&["192.168.0.1", "10.0.0.1"]),
+            disseminated.for_dissemination().take(2).cloned().collect::<Vec<_>>()
         );
     }
 
@@ -147,14 +180,21 @@ mod test {
         let mut disseminated = Disseminated::new();
         disseminated.add_with_limit("foo", 3);
 
-        assert_eq!(vec!["foo"], disseminated.iter().cloned().collect::<Vec<_>>());
-
-        disseminated.mark(1);
-        disseminated.mark(1);
-        disseminated.mark(1);
-        assert_eq!(vec!["foo"], disseminated.iter().cloned().collect::<Vec<_>>());
-
-        disseminated.mark(1);
-        assert_eq!(Vec::<String>::new(), disseminated.iter().cloned().collect::<Vec<_>>());
+        assert_eq!(
+            vec!["foo"],
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec!["foo"],
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec!["foo"],
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            Vec::<String>::new(),
+            disseminated.for_dissemination().cloned().collect::<Vec<_>>()
+        );
     }
 }

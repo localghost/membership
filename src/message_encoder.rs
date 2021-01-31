@@ -63,18 +63,6 @@ pub(crate) struct PingRequestMessageOut {
 #[derive(Debug)]
 pub(crate) struct DisseminationMessageOut {
     buffer: Bytes,
-    num_notifications: usize,
-    num_broadcast: usize,
-}
-
-impl DisseminationMessageOut {
-    pub(crate) fn num_notifications(&self) -> usize {
-        self.num_notifications
-    }
-
-    pub(crate) fn num_broadcast(&self) -> usize {
-        self.num_broadcast
-    }
 }
 
 #[derive(Debug)]
@@ -196,7 +184,6 @@ impl<T> From<Limit<BytesMut>> for SequenceNumberEncoder<T> {
 
 pub(crate) struct NotificationsEncoder {
     buffer: Limit<BytesMut>,
-    num_notifications: usize,
 }
 
 impl NotificationsEncoder {
@@ -216,20 +203,13 @@ impl NotificationsEncoder {
                 count += 1;
             }
             self.buffer.get_mut()[count_position] = count;
-            self.num_notifications = count as usize;
         }
-        Ok(BroadcastEncoder {
-            buffer: self.buffer,
-            num_notifications: self.num_notifications,
-            num_broadcast: 0,
-        })
+        Ok(BroadcastEncoder { buffer: self.buffer })
     }
 
     pub(crate) fn encode(self) -> OutgoingMessage {
         OutgoingMessage::DisseminationMessage(DisseminationMessageOut {
             buffer: self.buffer.into_inner().freeze(),
-            num_notifications: self.num_notifications,
-            num_broadcast: 0,
         })
     }
 
@@ -266,17 +246,12 @@ impl NotificationsEncoder {
 
 impl From<Limit<BytesMut>> for NotificationsEncoder {
     fn from(buffer: Limit<BytesMut>) -> Self {
-        Self {
-            buffer,
-            num_notifications: 0,
-        }
+        Self { buffer }
     }
 }
 
 pub(crate) struct BroadcastEncoder {
     buffer: Limit<BytesMut>,
-    num_notifications: usize,
-    num_broadcast: usize,
 }
 
 impl BroadcastEncoder {
@@ -293,7 +268,6 @@ impl BroadcastEncoder {
                 count += 1;
             }
             self.buffer.get_mut()[count_position] = count;
-            self.num_broadcast = count as usize;
         }
         Ok(self)
     }
@@ -301,8 +275,6 @@ impl BroadcastEncoder {
     pub(crate) fn encode(self) -> OutgoingMessage {
         OutgoingMessage::DisseminationMessage(DisseminationMessageOut {
             buffer: self.buffer.into_inner().freeze(),
-            num_notifications: self.num_notifications,
-            num_broadcast: self.num_broadcast,
         })
     }
 }
@@ -361,7 +333,7 @@ mod test {
             }];
             let encoder = NotificationsEncoder::from(BytesMut::new().limit(1));
             let encoder = encoder.notifications(notifications.iter()).unwrap();
-            assert_eq!(encoder.num_notifications, 0);
+            assert_eq!(encoder.encode().buffer()[0], 0);
         }
 
         #[test]
@@ -374,7 +346,7 @@ mod test {
                 BytesMut::new().limit(1 + NotificationsEncoder::size_of_notification(&notifications[0])),
             );
             let encoder = encoder.notifications(notifications.iter()).unwrap();
-            assert_eq!(encoder.num_notifications, 1);
+            assert_eq!(encoder.encode().buffer()[0], 1);
         }
     }
 
@@ -386,8 +358,6 @@ mod test {
         fn skip_when_empty_buffer() {
             let encoder = BroadcastEncoder {
                 buffer: BytesMut::new().limit(0),
-                num_notifications: 0,
-                num_broadcast: 0,
             };
             encoder.broadcast(create_members(1).iter()).unwrap();
         }
@@ -396,11 +366,9 @@ mod test {
         fn dont_overflow_buffer() {
             let encoder = BroadcastEncoder {
                 buffer: BytesMut::new().limit(1),
-                num_notifications: 0,
-                num_broadcast: 0,
             };
             let encoder = encoder.broadcast(create_members(1).iter()).unwrap();
-            assert_eq!(encoder.num_broadcast, 0);
+            assert_eq!(encoder.encode().buffer()[0], 0);
         }
 
         #[test]
@@ -408,11 +376,9 @@ mod test {
             let members = create_members(1);
             let encoder = BroadcastEncoder {
                 buffer: BytesMut::new().limit(1 + size_of_member(&members[0])),
-                num_notifications: 0,
-                num_broadcast: 0,
             };
             let encoder = encoder.broadcast(members.iter()).unwrap();
-            assert_eq!(encoder.num_broadcast, 1);
+            assert_eq!(encoder.encode().buffer()[0], 1);
         }
     }
 }
