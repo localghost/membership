@@ -150,7 +150,7 @@ impl SyncNode {
                 match event.token() {
                     Token(0) => {
                         if let Err(e) = self.handle_protocol_event(&event) {
-                            slog::warn!(self.logger, "Failed to process protocol event: {:?}", e);
+                            warn!(self.logger, "Failed to process protocol event: {:?}", e);
                         }
                     }
                     Token(1) => match self.receiver.try_recv() {
@@ -179,7 +179,7 @@ impl SyncNode {
                 }
             }
 
-            self.handle_acks()?;
+            self.handle_acks();
 
             self.drain_timeout_suspicions()
                 .into_iter()
@@ -197,16 +197,15 @@ impl SyncNode {
         Ok(())
     }
 
-    fn handle_acks(&mut self) -> Result<()> {
+    fn handle_acks(&mut self) {
         let now = std::time::Instant::now();
         let ack_timeout = Duration::from_secs(self.config.ack_timeout as u64);
         let (handle, postpone): (Vec<_>, Vec<_>) = self
             .acks
             .drain(..)
             .partition(|ack| ack.request_time + ack_timeout <= now);
-        handle.into_iter().try_for_each(|ack| self.handle_timeout_ack(ack))?;
+        handle.into_iter().for_each(|ack| self.handle_timeout_ack(ack));
         self.acks = postpone;
-        Ok(())
     }
 
     fn handle_timeouts(&mut self) {
@@ -271,7 +270,7 @@ impl SyncNode {
         info!(self.logger, "New epoch: {}", self.epoch);
     }
 
-    fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
+    fn handle_timeout_ack(&mut self, ack: Ack) {
         match ack.request {
             Request::Init(address) => {
                 info!(self.logger, "Failed to join {}", address);
@@ -303,7 +302,6 @@ impl SyncNode {
             }
             _ => unreachable!(),
         }
-        Ok(())
     }
 
     fn bind(&mut self, poll: &Poll) -> Result<()> {
