@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 
 /// Configuration for the membership protocol.
+#[derive(Debug)]
 pub struct ProtocolConfig {
     /// Number of seconds between checking new member.
     pub protocol_period: u64,

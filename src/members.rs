@@ -52,7 +52,7 @@ impl Members {
             rng: SmallRng::from_entropy(),
         }
     }
-    pub(crate) fn next(&mut self) -> Option<MemberId> {
+    pub(crate) fn next(&mut self) -> Option<&Member> {
         if self.ordered.is_empty() {
             return None;
         }
@@ -65,7 +65,7 @@ impl Members {
         }
         let target = self.ordered[self.next_index];
         self.next_index = (self.next_index + 1) % self.ordered.len();
-        Some(target)
+        self.get(&target)
     }
 
     pub(crate) fn has(&self, id: &MemberId) -> bool {

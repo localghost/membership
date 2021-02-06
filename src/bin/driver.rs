@@ -3,6 +3,7 @@ use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::Build;
 use std::net::SocketAddr;
 use structopt::StructOpt;
+use tracing_subscriber;
 
 #[derive(StructOpt)]
 struct Options {
@@ -43,10 +44,12 @@ impl From<ProtocolOptions> for ProtocolConfig {
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
+    let subscriber = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).finish();
+    tracing::subscriber::set_global_default(subscriber);
+    // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Options::from_args();
     let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));
-    membership.set_logger(TerminalLoggerBuilder::new().build()?);
+    // membership.set_logger(TerminalLoggerBuilder::new().build()?);
     match config.join_address {
         Some(address) => membership.join(address),
         None => membership.start(),

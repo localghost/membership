@@ -4,8 +4,8 @@ use crate::result::Result;
 use crate::sync_node::{ChannelMessage, SyncNode};
 use crate::ProtocolConfig;
 use anyhow::{anyhow, Context};
-use mio_extras::channel::Sender;
 use std::net::SocketAddr;
+use tokio::sync::mpsc::Sender;
 
 /// Runs the gossip protocol on an internal thread.
 pub struct Node {
@@ -89,7 +89,7 @@ impl Node {
         self.sender
             .as_ref()
             .unwrap()
-            .send(ChannelMessage::Stop)
+            .blocking_send(ChannelMessage::Stop)
             .with_context(|| format!("Failed to stop message"))?;
         self.wait()
     }
@@ -104,7 +104,7 @@ impl Node {
         self.sender
             .as_ref()
             .unwrap()
-            .send(ChannelMessage::GetMembers(sender))
+            .blocking_send(ChannelMessage::GetMembers(sender))
             .with_context(|| format!("Failed to ask for members"))?;
         receiver.recv().with_context(|| format!("Failed to get members"))
     }
