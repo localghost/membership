@@ -22,7 +22,7 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::runtime;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 struct IncomingLetter {
     sender: SocketAddr,
@@ -87,6 +87,7 @@ enum Request {
 pub(crate) enum ChannelMessage {
     Stop,
     GetMembers(std::sync::mpsc::SyncSender<Vec<SocketAddr>>),
+    Join(SocketAddr),
 }
 
 // Unfortunately SyncNode needs to be passed explicitly, it cannot be captured by closure.
@@ -154,7 +155,7 @@ impl SyncNode {
                 let (sender, receiver) = messenger.start(self.myself.address)?;
                 self.msg_sender = Some(sender);
                 self.msg_receiver = Some(receiver);
-                self.run().await;
+                self.run().await?;
                 Ok(())
             })
         })
@@ -170,7 +171,7 @@ impl SyncNode {
                     self.advance_epoch().await?
                 }
                 _ = ack_interval.tick() => {
-                    self.handle_acks()
+                    self.handle_acks().await
                 }
                 Some(letter) = self.msg_receiver.as_mut().unwrap().recv() => {
                     match letter.message {
@@ -181,6 +182,22 @@ impl SyncNode {
                 }
                 Some(message) = self.receiver.recv() => {
                     match message {
+                        ChannelMessage::Join(address) => {
+                            info!("Received request to join {}", address);
+                            let message = DisseminationMessageEncoder::new(1024)
+                                .message_type(MessageType::Ping)?
+                                .sender(&self.myself)?
+                                .sequence_number(self.get_next_sequence_number())?
+                                .notifications(self.notifications.for_dissemination())?
+                                .broadcast(self.members.for_broadcast())?
+                                .encode();
+                            self.msg_sender
+                                .as_mut()
+                                .unwrap()
+                                .send(OutgoingLetter { to: address, message })
+                                .await
+                                .with_context(|| format!("Failed to PING"))?;
+                        }
                         ChannelMessage::Stop => {
                             // TODO: stop the node
                             todo!()
@@ -261,14 +278,20 @@ impl SyncNode {
     //     Ok(())
     // }
     //
-    fn handle_acks(&mut self) {
+    async fn handle_acks(&mut self) {
+        debug!("Handling acks");
         let now = std::time::Instant::now();
         let ack_timeout = Duration::from_secs(self.config.ack_timeout as u64);
         let (handle, postpone): (Vec<_>, Vec<_>) = self
             .acks
             .drain(..)
             .partition(|ack| ack.request_time + ack_timeout <= now);
-        // handle.into_iter().for_each(|ack| self.handle_timeout_ack(ack));
+        for ack in handle {
+            match self.handle_timeout_ack(ack).await {
+                Ok(()) => {}
+                Err(e) => error!("Failed to handled timed out ACK"),
+            }
+        }
         self.acks = postpone;
     }
     //
@@ -326,6 +349,7 @@ impl SyncNode {
         self.epoch += 1;
         info!("New epoch: {}", self.epoch);
         if let Some(member) = self.members.next() {
+            let member = member.clone();
             let sequence_number = self.get_next_sequence_number();
             let message = DisseminationMessageEncoder::new(1024)
                 .message_type(MessageType::Ping)?
@@ -338,11 +362,12 @@ impl SyncNode {
                 .as_mut()
                 .unwrap()
                 .send(OutgoingLetter {
-                    receiver: member.address,
+                    to: member.address,
                     message,
                 })
                 .await
-                .with_context(|| format!("Failed to PIND: {:?}", message))?;
+                .with_context(|| format!("Failed to PING"))?;
+            debug!("Pushing ACK for the PING message");
             self.acks.push(Ack::new(Request::Ping(Header {
                 member_id: member.id,
                 sequence_number,
@@ -350,41 +375,111 @@ impl SyncNode {
         }
         Ok(())
     }
-    //
-    // fn handle_timeout_ack(&mut self, ack: Ack) {
-    //     match ack.request {
-    //         Request::Init(address) => {
-    //             info!(self.logger, "Failed to join {}", address);
-    //             self.timeouts.push(Timeout {
-    //                 when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
-    //                 what: Box::new(|myself| myself.requests.push_front(ack.request)),
-    //             });
-    //         }
-    //         Request::Ping(header) => {
-    //             self.requests.push_back(Request::PingIndirect(header));
-    //         }
-    //         Request::PingIndirect(header) => {
-    //             if let Some(member) = self.members.get(&header.member_id) {
-    //                 // FIXME: it shouldn't be necessary to clone the member :/
-    //                 let member = member.clone();
-    //                 self.handle_suspect_other(&member);
-    //             } else {
-    //                 warn!(
-    //                     self.logger,
-    //                     "Trying to suspect a member that has already been removed: {}", header.member_id
-    //                 );
-    //             }
-    //         }
-    //         Request::PingProxy(request) => {
-    //             warn!(
-    //                 self.logger,
-    //                 "Ping proxy from {} to {} timed out", request.sender.id, request.target.id
-    //             );
-    //         }
-    //         _ => unreachable!(),
-    //     }
-    // }
-    //
+
+    async fn ping(&mut self, to: SocketAddr) -> Result<()> {
+        let message = DisseminationMessageEncoder::new(1024)
+            .message_type(MessageType::Ping)?
+            .sender(&self.myself)?
+            .sequence_number(self.get_next_sequence_number())?
+            .notifications(self.notifications.for_dissemination())?
+            .broadcast(self.members.for_broadcast())?
+            .encode();
+        self.msg_sender
+            .as_mut()
+            .unwrap()
+            .send(OutgoingLetter { to, message })
+            .await
+            .with_context(|| format!("Failed to PING"))
+    }
+
+    async fn send_protocol_message(&mut self, message_type: MessageType, to: SocketAddr) -> Result<()> {
+        let message = DisseminationMessageEncoder::new(1024)
+            .message_type(message_type)?
+            .sender(&self.myself)?
+            .sequence_number(self.get_next_sequence_number())?
+            .notifications(self.notifications.for_dissemination())?
+            .broadcast(self.members.for_broadcast())?
+            .encode();
+        self.msg_sender
+            .as_mut()
+            .unwrap()
+            .send(OutgoingLetter { to: to, message })
+            .await
+            .with_context(|| format!("Failed to PING"))
+    }
+
+    async fn send_message(&mut self, letter: OutgoingLetter) -> Result<()> {
+        self.msg_sender
+            .as_mut()
+            .unwrap()
+            .send(letter)
+            .await
+            .with_context(|| format!("Failed to send message"))
+    }
+
+    async fn ping_indirect(&mut self, target: MemberId) -> Result<()> {
+        let indirect_members = self
+            .members
+            .iter()
+            .filter(|key| key.id != target)
+            .take(self.config.num_indirect as usize)
+            .cloned()
+            .collect::<Vec<_>>();
+        for member in indirect_members {
+            debug!("Sending INDIRECT PING request to {:?}", member);
+            let message = PingRequestMessageEncoder::new()
+                .sender(&self.myself)?
+                .sequence_number(self.get_next_sequence_number())?
+                .target(&self.members.get(&target).unwrap())?
+                .encode();
+            self.send_message(OutgoingLetter {
+                message,
+                to: member.address,
+            })
+            .await
+            .with_context(|| "Failed")?;
+        }
+        Ok(())
+    }
+
+    async fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
+        debug!("Handling timeouted ACKs");
+        match ack.request {
+            Request::Init(address) => {
+                info!("Failed to join {}", address);
+                self.timeouts.push(Timeout {
+                    when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
+                    what: Box::new(|myself| myself.requests.push_front(ack.request)),
+                });
+            }
+            Request::Ping(header) => {
+                debug!("PING ACK timed out, sending INDIRECT PING request");
+                self.ping_indirect(header.member_id).await?;
+                self.requests.push_back(Request::PingIndirect(header));
+            }
+            Request::PingIndirect(header) => {
+                if let Some(member) = self.members.get(&header.member_id) {
+                    // FIXME: it shouldn't be necessary to clone the member :/
+                    let member = member.clone();
+                    self.handle_suspect_other(&member);
+                } else {
+                    warn!(
+                        "Trying to suspect a member that has already been removed: {}",
+                        header.member_id
+                    );
+                }
+            }
+            Request::PingProxy(request) => {
+                warn!(
+                    "Ping proxy from {} to {} timed out",
+                    request.sender.id, request.target.id
+                );
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
     // fn bind(&mut self, poll: &Poll) -> Result<()> {
     //     self.udp = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind UDP socket")?);
     //     // FIXME: change to `PollOpt::edge()`
@@ -442,7 +537,10 @@ impl SyncNode {
         // This can happen if this node is returning to a group before the group noticing that the node's previous
         // instance has died.
         if member.address == self.myself.address {
-            warn!("Trying to add myself but with wrong ID {:?}", member);
+            warn!(
+                "Trying to add myself but with wrong id: myself={}, other={}",
+                self.myself.id, member.id
+            );
             return;
         }
         match self.members.add_or_update(member.clone()) {
@@ -727,7 +825,7 @@ impl SyncNode {
             .as_mut()
             .unwrap()
             .send(OutgoingLetter {
-                receiver: message.sender.address,
+                to: message.sender.address,
                 message: ack,
             })
             .await
@@ -746,7 +844,7 @@ impl SyncNode {
             .as_mut()
             .unwrap()
             .send(OutgoingLetter {
-                receiver: message.target.address,
+                to: message.target.address,
                 message: ping_proxy,
             })
             .await

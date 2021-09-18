@@ -1,4 +1,5 @@
 use crate::incoming_message::IncomingMessage;
+use crate::message_decoder::decode_message;
 use crate::message_encoder::OutgoingMessage;
 use crate::result::Result;
 use std::fmt;
@@ -7,6 +8,7 @@ use tokio;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
+use tracing::{debug, info, warn};
 
 pub(crate) trait Messenger {
     /// Returns:
@@ -18,7 +20,7 @@ pub(crate) trait Messenger {
 }
 
 pub(crate) struct IncomingLetter {
-    pub(crate) sender: SocketAddr,
+    pub(crate) from: SocketAddr,
     pub(crate) message: IncomingMessage,
 }
 
@@ -27,13 +29,13 @@ impl fmt::Debug for IncomingLetter {
         write!(
             f,
             "IncomingLetter{{ sender: {:#?}, message: {:#?} }}",
-            self.sender, self.message
+            self.from, self.message
         )
     }
 }
 
 pub(crate) struct OutgoingLetter {
-    pub(crate) receiver: SocketAddr,
+    pub(crate) to: SocketAddr,
     pub(crate) message: OutgoingMessage,
 }
 
@@ -42,7 +44,7 @@ impl fmt::Debug for OutgoingLetter {
         write!(
             f,
             "OutgoingLetter{{ receiver: {:#?}, message: {:#?} }}",
-            self.receiver, self.message
+            self.to, self.message
         )
     }
 }
@@ -60,6 +62,7 @@ struct MessangerActor {
     address: SocketAddr,
     egress: Receiver<OutgoingLetter>,
     ingress: Sender<IncomingLetter>,
+    recv_buffer: Vec<u8>,
 }
 
 impl MessangerActor {
@@ -76,6 +79,7 @@ impl MessangerActor {
                 address,
                 egress,
                 ingress,
+                recv_buffer: vec![0u8; 1500],
             },
             stop_sender,
         )
@@ -87,16 +91,37 @@ impl MessangerActor {
             tokio::select! {
                 _ = self.stop_receiver.recv() => break,
                 Some(message) = self.egress.recv() => self.send(message).await,
+                result = self.udp.as_mut().unwrap().recv_from(&mut self.recv_buffer) => {
+                    match result {
+                        Ok((count, sender)) => {
+                            debug!("Received {} bytes from {:?}", count, sender);
+                            let message = match decode_message(&self.recv_buffer[..count]) {
+                                Ok(message) => {
+                                    let letter = IncomingLetter { from: sender, message };
+                                    debug!("{:?}", letter);
+                                    self.ingress.send(letter).await?;
+                                },
+                                Err(e) => {
+                                    warn!("Failed to decode from message {:#?}: {}", sender, e);
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            warn!("Failed to receive letter due to {:?}", e);
+                        }
+                    }
+                }
             };
         }
         Ok(())
     }
 
     async fn send(&mut self, letter: OutgoingLetter) {
+        debug!("Sending message to {}", letter.to);
         self.udp
             .as_mut()
             .unwrap()
-            .send_to(letter.message.buffer(), letter.receiver)
+            .send_to(letter.message.buffer(), letter.to)
             .await;
     }
 }

@@ -47,19 +47,12 @@ impl Node {
     /// Member might not be instantly spotted by all other members of the group.
     pub fn join(&mut self, member: SocketAddr) -> Result<()> {
         assert_ne!(member, self.bind_address, "Can't join yourself");
-        assert!(self.handle.is_none(), "You have already started");
-
-        let (mut sync_node, sender) = SyncNode::new(self.bind_address, self.config.take().unwrap());
-        if let Some(logger) = self.logger.take() {
-            sync_node.set_logger(logger)
-        }
-        self.sender = Some(sender);
-        self.handle = Some(
-            std::thread::Builder::new()
-                .name("membership".to_string())
-                .spawn(move || sync_node.join(member))?,
-        );
-        Ok(())
+        self.start()?;
+        self.sender
+            .as_ref()
+            .unwrap()
+            .blocking_send(ChannelMessage::Join(member))
+            .with_context(|| format!("Failed to join member {}", member))
     }
 
     /// Starts new group.
