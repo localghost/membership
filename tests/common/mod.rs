@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")] // namespaces, iptables: all these is linux-specicfic.
 use iptables;
 use membership::{Node, ProtocolConfig};
 use sloggers::terminal::TerminalLoggerBuilder;

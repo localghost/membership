@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")] // namespaces, iptables: all these is linux-specicfic.
 use anyhow;
 use membership;
 use membership::Node;
