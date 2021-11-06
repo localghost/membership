@@ -95,7 +95,7 @@ impl MessangerActor {
                     match result {
                         Ok((count, sender)) => {
                             debug!("Received {} bytes from {:?}", count, sender);
-                            let message = match decode_message(&self.recv_buffer[..count]) {
+                            match decode_message(&self.recv_buffer[..count]) {
                                 Ok(message) => {
                                     let letter = IncomingLetter { from: sender, message };
                                     debug!("{:?}", letter);
@@ -117,12 +117,17 @@ impl MessangerActor {
     }
 
     async fn send(&mut self, letter: OutgoingLetter) {
-        debug!("Sending message to {}", letter.to);
-        self.udp
+        debug!("Sending letter {:?}", letter);
+        match self
+            .udp
             .as_mut()
             .unwrap()
             .send_to(letter.message.buffer(), letter.to)
-            .await;
+            .await
+        {
+            Err(e) => warn!("Failed to send message {:?} due to {}", letter, e),
+            Ok(_) => {}
+        }
     }
 }
 

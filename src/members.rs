@@ -77,7 +77,7 @@ impl Members {
 
     pub(crate) fn add_or_update(&mut self, member: Member) -> Result<()> {
         if self.dead.contains(&member.id) {
-            bail!("Member {} is already marked as dead")
+            bail!("Member {:?} is already marked as dead", member)
         }
         // If the node is already registered then we only update its incarnation if a higher one is spotted.
         if let Some(m) = self.members.get_mut(&member.id) {
@@ -93,10 +93,12 @@ impl Members {
     }
 
     pub(crate) fn remove(&mut self, id: &MemberId) -> Result<()> {
+        // Always keep a member passed for removal as dead. Even if it does not exist in members.
+        // FIXME: clean up the list periodically, removing the oldest entries first.
+        self.dead.insert(*id);
+
         match self.members.remove(id) {
             Some(_) => {
-                self.dead.insert(*id);
-
                 let idx = self.ordered.iter().position(|e| e == id).unwrap();
                 self.ordered.remove(idx);
                 self.broadcast.remove_item(id);

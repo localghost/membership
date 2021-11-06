@@ -55,17 +55,17 @@ impl DisseminationMessageEncoder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PingRequestMessageOut {
     buffer: Bytes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct DisseminationMessageOut {
     buffer: Bytes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum OutgoingMessage {
     DisseminationMessage(DisseminationMessageOut),
     PingRequestMessage(PingRequestMessageOut),
