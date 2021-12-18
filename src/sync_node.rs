@@ -254,15 +254,69 @@ impl SyncNode {
             Request::Ping(_) => self.handle_request_ping(request).await?,
             Request::PingIndirect(_) => self.handle_request_ping_indirect(request).await?,
             Request::PingProxy(_) => self.handle_request_ping_proxy(request).await?,
-            //            Request::PingProxy(ping_proxy) => self.handle_request_ping_proxy(ping_proxy),
-            //            Request::Ack(header) => self.handle_request_ack(header),
-            //            Request::AckIndirect(ack_indirect) => self.handle_request_ack_indirect(ack_indirect),
-            _ => todo!(),
+            Request::Ack(_) => self.handle_request_ack(request).await?,
+            Request::AckIndirect(_) => self.handle_request_ack_indirect(request).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_request_ack_indirect(&mut self, request: Request) -> Result<()> {
+        let ack_indirect = extract_enum!(request, Request::AckIndirect);
+        let message = DisseminationMessageEncoder::new(1024)
+            .message_type(MessageType::PingAck)?
+            .sender(&self.myself)?
+            .sequence_number(ack_indirect.sequence_number)?
+            .encode();
+        self.send_message(OutgoingLetter {
+            message,
+            to: ack_indirect.target.address,
+        })
+        .await
+        .context("Unable to send AckIndirect")?;
+        Ok(())
+    }
+
+    async fn handle_request_ack(&mut self, request: Request) -> Result<()> {
+        let header = extract_enum!(request, Request::Ack);
+        match self.members.get(&header.member_id).cloned() {
+            Some(member) => {
+                let message = DisseminationMessageEncoder::new(1024)
+                    .message_type(MessageType::PingAck)?
+                    .sender(&self.myself)?
+                    .sequence_number(header.sequence_number)?
+                    .notifications(self.notifications.for_dissemination())?
+                    .broadcast(self.members.for_broadcast())?
+                    .encode();
+                self.send_message(OutgoingLetter {
+                    message,
+                    to: member.address,
+                })
+                .await
+                .context("Failed to send ACK")?;
+            }
+            None => {
+                warn!("Trying to send ACK {:?} to a member that has been removed", header);
+            }
         }
         Ok(())
     }
 
     async fn handle_request_ping_proxy(&mut self, request: Request) -> Result<()> {
+        let ping_proxy = extract_enum!(request, Request::PingProxy);
+        let message = DisseminationMessageEncoder::new(1024)
+            .message_type(MessageType::Ping)?
+            .sender(&self.myself)?
+            .sequence_number(ping_proxy.sequence_number)?
+            .notifications(self.notifications.for_dissemination())?
+            .broadcast(self.members.for_broadcast())?
+            .encode();
+        self.send_message(OutgoingLetter {
+            message,
+            to: ping_proxy.target.address,
+        })
+        .await
+        .context("Failed to send PingProxy")?;
+        self.acks.push(Ack::new(request));
         Ok(())
     }
 
@@ -291,7 +345,7 @@ impl SyncNode {
                     .context("Failed to send PingRequest")?;
                 }
             }
-            None => debug!("Member has already been removed {:?}", header.member_id)
+            None => debug!("Member has already been removed {:?}", header.member_id),
         }
         Ok(())
     }
