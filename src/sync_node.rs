@@ -100,12 +100,6 @@ macro_rules! extract_enum {
     };
 }
 
-// Unfortunately SyncNode needs to be passed explicitly, it cannot be captured by closure.
-struct Timeout<F: FnOnce(&mut SyncNode)> {
-    when: std::time::Instant,
-    what: F,
-}
-
 fn create_interval(seconds: u64, behavior: tt::MissedTickBehavior) -> tt::Interval {
     let mut interval = tt::interval(Duration::from_secs(seconds));
     interval.set_missed_tick_behavior(behavior);
@@ -124,15 +118,10 @@ pub(crate) struct SyncNode {
     receiver: tokio::sync::mpsc::Receiver<ChannelMessage>,
     acks: Vec<Ack>,
     suspicions: VecDeque<Suspicion>,
-    timeouts: Vec<Timeout<Box<dyn FnOnce(&mut SyncNode) + Send>>>,
     logger: slog::Logger,
     members: Members,
     msg_sender: Option<tokio::sync::mpsc::Sender<OutgoingLetter>>,
     msg_receiver: Option<tokio::sync::mpsc::Receiver<crate::messenger::IncomingLetter>>,
-    timeout_sender:
-        tokio::sync::mpsc::UnboundedSender<Box<dyn FnOnce(&mut SyncNode) -> Result<OutgoingMessage> + Send>>,
-    timeout_receiver:
-        tokio::sync::mpsc::UnboundedReceiver<Box<dyn FnOnce(&mut SyncNode) -> Result<OutgoingMessage> + Send>>,
     requests_sender: tokio::sync::mpsc::UnboundedSender<Request>,
     requests_receiver: tokio::sync::mpsc::UnboundedReceiver<Request>,
 }
@@ -143,7 +132,6 @@ impl SyncNode {
         config: ProtocolConfig,
     ) -> (SyncNode, tokio::sync::mpsc::Sender<ChannelMessage>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
-        let (timeout_sender, timeout_receiver) = tokio::sync::mpsc::unbounded_channel();
         let (requests_sender, requests_receiver) = tokio::sync::mpsc::unbounded_channel();
         let gossip = SyncNode {
             config,
@@ -155,13 +143,10 @@ impl SyncNode {
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
             suspicions: VecDeque::new(),
-            timeouts: Vec::new(),
             logger: slog::Logger::root(slog::Discard, slog::o!()),
             members: Members::new(),
             msg_sender: None,
             msg_receiver: None,
-            timeout_sender,
-            timeout_receiver,
             requests_sender,
             requests_receiver,
         };
@@ -205,9 +190,6 @@ impl SyncNode {
                         .into_iter()
                         .for_each(|s| self.handle_timeout_suspicion(&s));
                 }
-                Some(action) = self.timeout_receiver.recv() => {
-                    action(self);
-                }
                 Some(letter) = self.msg_receiver.as_mut().unwrap().recv() => {
                     match letter.message {
                         IncomingMessage::Ping(m) => self.handle_ping(&m).await?,
@@ -216,7 +198,9 @@ impl SyncNode {
                     }
                 }
                 Some(request) = self.requests_receiver.recv() => {
-                    self.handle_request(request);
+                    if let Err(e) = self.handle_request(request).await {
+                        warn!("Failed to handle request: {}", e);
+                    }
                 }
                 Some(message) = self.receiver.recv() => {
                     match message {
@@ -383,67 +367,7 @@ impl SyncNode {
         }
         Ok(())
     }
-    // pub(crate) fn start(&mut self) -> Result<()> {
-    //     let poll = Poll::new().unwrap();
-    //     poll.register(&self.receiver, Token(1), Ready::readable(), PollOpt::empty())?;
-    //     self.bind(&poll)?;
-    //
-    //     let mut events = Events::with_capacity(1024);
-    //     let mut last_epoch_time = std::time::Instant::now();
-    //
-    //     'mainloop: loop {
-    //         poll.poll(&mut events, Some(Duration::from_millis(100))).unwrap();
-    //         for event in events.iter() {
-    //             match event.token() {
-    //                 Token(0) => {
-    //                     if let Err(e) = self.handle_protocol_event(&event) {
-    //                         warn!(self.logger, "Failed to process protocol event: {:?}", e);
-    //                     }
-    //                 }
-    //                 Token(1) => match self.receiver.try_recv() {
-    //                     Ok(message) => {
-    //                         debug!(self.logger, "ChannelMessage::{:?}", message);
-    //                         match message {
-    //                             ChannelMessage::Stop => {
-    //                                 break 'mainloop;
-    //                             }
-    //                             ChannelMessage::GetMembers(sender) => {
-    //                                 let members = std::iter::once(&self.myself.address)
-    //                                     .chain(self.members.iter().map(|m| &m.address))
-    //                                     .cloned()
-    //                                     .collect::<Vec<_>>();
-    //                                 if let Err(e) = sender.send(members) {
-    //                                     warn!(self.logger, "Failed to send list of members: {:?}", e);
-    //                                 }
-    //                             }
-    //                         }
-    //                     }
-    //                     Err(e) => {
-    //                         debug!(self.logger, "Not ready yet: {:?}", e);
-    //                     }
-    //                 },
-    //                 _ => unreachable!(),
-    //             }
-    //         }
-    //
-    //         self.handle_acks();
-    //
-    //         self.drain_timeout_suspicions()
-    //             .into_iter()
-    //             .for_each(|s| self.handle_timeout_suspicion(&s));
-    //
-    //         let now = std::time::Instant::now();
-    //         if now > (last_epoch_time + Duration::from_secs(self.config.protocol_period)) {
-    //             self.advance_epoch();
-    //             last_epoch_time = now;
-    //         }
-    //
-    //         self.handle_timeouts();
-    //     }
-    //
-    //     Ok(())
-    // }
-    //
+
     async fn handle_acks(&mut self) {
         debug!("Handling acks");
         let now = std::time::Instant::now();
@@ -460,13 +384,6 @@ impl SyncNode {
             }
         }
     }
-    //
-    // fn handle_timeouts(&mut self) {
-    //     let now = std::time::Instant::now();
-    //     let (handle, postpone): (Vec<_>, Vec<_>) = self.timeouts.drain(..).partition(|t| t.when <= now);
-    //     handle.into_iter().for_each(|t| (t.what)(self));
-    //     self.timeouts = postpone;
-    // }
 
     fn drain_timeout_suspicions(&mut self) -> Vec<Suspicion> {
         let mut suspicions = Vec::new();
@@ -485,11 +402,6 @@ impl SyncNode {
             }
         }
         suspicions
-    }
-
-    pub(crate) fn join(&mut self, member: SocketAddr) -> Result<()> {
-        assert_ne!(member, self.myself.address, "Can't join yourself");
-        self.start()
     }
 
     fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
@@ -581,24 +493,65 @@ impl SyncNode {
         Ok(())
     }
 
+    async fn handle_ack(&mut self, message: &DisseminationMessageIn) -> Result<()> {
+        for ack in self.acks.drain(..).collect::<Vec<_>>() {
+            match ack.request {
+                Request::Init(address) => {
+                    self.update_state(message);
+                    if message.sender.address != address || message.sequence_number != 0 {
+                        panic!("Initial ping request failed, unable to continue");
+                    }
+                    continue;
+                }
+                Request::PingIndirect(ref header) => {
+                    self.update_state(message);
+                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
+                        continue;
+                    }
+                }
+                Request::PingProxy(ref ping_proxy) => {
+                    if message.sender.id == ping_proxy.target.id
+                        && message.sequence_number == ping_proxy.sequence_number
+                    {
+                        self.requests_sender.send(Request::Ack(Header {
+                            member_id: ping_proxy.sender.id,
+                            sequence_number: ping_proxy.sequence_number,
+                        }))?;
+                        continue;
+                    }
+                }
+                Request::Ping(ref header) => {
+                    self.update_state(message);
+                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
+                        continue;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            self.acks.push(ack);
+        }
+        Ok(())
+    }
+
+    fn retry_after(&mut self, request: Request, timeout: Duration) {
+        let sender = self.requests_sender.clone();
+        tokio::spawn(async move {
+            debug!("Retrying request {:?} after {:?}", request, timeout);
+            tokio::time::sleep(timeout).await;
+            if let Err(e) = sender.send(request) {
+                // FIXME: This should cause node to shutdown, some internal fatal error
+                // must have happened if we could not send to unbounded channel.
+                warn!("Failed to re-try request: {}", e);
+            }
+        });
+    }
+
     async fn handle_timeout_ack(&mut self, ack: Ack) -> Result<()> {
         debug!("Handling Ack that timed out: {:?}", ack);
         match ack.request {
             Request::Init(address) => {
                 info!("Failed to join {}", address);
-                // FIXME: Instead of panic, bubble the error up and stop the protocol.
-                panic!("Failed to join initial member {}", address);
-                //    let sender = self.timeout_sender.clone();
-                //    tokio::spawn(async move {
-                //        tokio::time::sleep(Duration::from_secs(2)).await;
-                //        sender.send(Box::new(move |myself| -> Result<OutgoingMessage> {
-                //            myself.create_protocol_message(MessageType::Ping, 0)
-                //        }));
-                //    });
-                // self.timeouts.push(Timeout {
-                //     when: std::time::Instant::now() + std::time::Duration::from_secs(self.config.join_retry_timeout),
-                //     what: Box::new(|myself| myself.requests.push_front(ack.request)),
-                // });
+                self.retry_after(Request::Init(address), Duration::from_secs(2));
             }
             Request::Ping(header) => {
                 match self.members.get(&header.member_id) {
@@ -636,50 +589,6 @@ impl SyncNode {
         Ok(())
     }
 
-    // fn bind(&mut self, poll: &Poll) -> Result<()> {
-    //     self.udp = Some(UdpSocket::bind(&self.myself.address).context("Failed to bind UDP socket")?);
-    //     // FIXME: change to `PollOpt::edge()`
-    //     poll.register(
-    //         self.udp.as_ref().unwrap(),
-    //         Token(0),
-    //         Ready::readable() | Ready::writable(),
-    //         PollOpt::level(),
-    //     )
-    //     .with_context(|| format!("Failed to register UDP socket for polling"))
-    // }
-    //
-    // fn send_message(&mut self, target: SocketAddr, message: OutgoingMessage) {
-    //     debug!(self.logger, "{:?} <- {:?}", target, message);
-    //     match self.udp.as_ref().unwrap().send_to(message.buffer(), &target) {
-    //         Err(e) => warn!(self.logger, "Message to {:?} was not delivered due to {:?}", target, e),
-    //         Ok(count) => {
-    //             debug!(self.logger, "Send {} bytes", count);
-    //         }
-    //     }
-    // }
-    //
-    // fn recv_letter(&mut self) -> Option<IncomingLetter> {
-    //     match self.udp.as_ref().unwrap().recv_from(&mut self.recv_buffer) {
-    //         Ok((count, sender)) => {
-    //             debug!(self.logger, "Received {} bytes from {:?}", count, sender);
-    //             let message = match decode_message(&self.recv_buffer[..count]) {
-    //                 Ok(message) => message,
-    //                 Err(e) => {
-    //                     warn!(self.logger, "Failed to decode from message {:#?}: {}", sender, e);
-    //                     return None;
-    //                 }
-    //             };
-    //             let letter = IncomingLetter { sender, message };
-    //             debug!(self.logger, "{:?}", letter);
-    //             Some(letter)
-    //         }
-    //         Err(e) => {
-    //             warn!(self.logger, "Failed to receive letter due to {:?}", e);
-    //             None
-    //         }
-    //     }
-    // }
-    //
     fn update_members<'m>(&mut self, members: impl Iterator<Item = &'m Member>) {
         for member in members {
             self.update_member(member);
@@ -926,53 +835,6 @@ impl SyncNode {
     fn update_state(&mut self, message: &DisseminationMessageIn) {
         self.update_members(std::iter::once(&message.sender).chain(message.broadcast.iter()));
         self.process_notifications(message.notifications.iter());
-    }
-
-    async fn handle_ack(&mut self, message: &DisseminationMessageIn) -> Result<()> {
-        for ack in self.acks.drain(..).collect::<Vec<_>>() {
-            match ack.request {
-                Request::Init(address) => {
-                    self.update_state(message);
-                    if message.sender.address != address || message.sequence_number != 0 {
-                        panic!("Initial ping request failed, unable to continue");
-                    }
-                    continue;
-                }
-                Request::PingIndirect(ref header) => {
-                    self.update_state(message);
-                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
-                        continue;
-                    }
-                }
-                Request::PingProxy(ref ping_proxy) => {
-                    if message.sender.id == ping_proxy.target.id
-                        && message.sequence_number == ping_proxy.sequence_number
-                    {
-                        let message = DisseminationMessageEncoder::new(1024)
-                            .message_type(MessageType::PingAck)?
-                            .sender(&self.myself)?
-                            .sequence_number(ping_proxy.sequence_number)?
-                            .encode();
-                        self.send_message(OutgoingLetter {
-                            to: ping_proxy.sender.address,
-                            message,
-                        })
-                        .await
-                        .context(format!("Failed to Ack PingProxy"))?;
-                        continue;
-                    }
-                }
-                Request::Ping(ref header) => {
-                    self.update_state(message);
-                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
-                        continue;
-                    }
-                }
-                _ => unreachable!(),
-            }
-            self.acks.push(ack);
-        }
-        Ok(())
     }
 
     async fn handle_ping(&mut self, message: &DisseminationMessageIn) -> Result<()> {
