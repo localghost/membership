@@ -5,7 +5,6 @@ use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingReque
 use crate::member::{Member, MemberId};
 use crate::members::Members;
 use crate::message::MessageType;
-use crate::message_decoder::decode_message;
 use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
 use crate::messenger::{Messenger, MessengerImpl, OutgoingLetter};
 use crate::notification::Notification;
@@ -13,10 +12,6 @@ use crate::result::Result;
 use crate::suspicion::Suspicion;
 use crate::ProtocolConfig;
 use anyhow::Context;
-// use mio::net::UdpSocket;
-// use mio::{Event, Events, Poll, PollOpt, Ready, Token};
-// use mio_extras::channel::{Receiver, Sender};
-// use slog::{debug, info, warn};
 use std::collections::VecDeque;
 use std::fmt;
 use std::net::SocketAddr;
@@ -109,11 +104,9 @@ fn create_interval(seconds: u64, behavior: tt::MissedTickBehavior) -> tt::Interv
 /// Runs the protocol on current thread, blocking it.
 pub(crate) struct SyncNode {
     config: ProtocolConfig,
-    // udp: Option<UdpSocket>,
     notifications: Disseminated<Notification>,
     epoch: u64,
     sequence_number: u64,
-    recv_buffer: Vec<u8>,
     myself: Member,
     receiver: tokio::sync::mpsc::Receiver<ChannelMessage>,
     acks: Vec<Ack>,
@@ -138,7 +131,6 @@ impl SyncNode {
             notifications: Disseminated::new(),
             epoch: 0,
             sequence_number: 0,
-            recv_buffer: vec![0u8; 1500],
             myself: Member::new(bind_address),
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
