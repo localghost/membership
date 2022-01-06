@@ -64,19 +64,17 @@ struct PingProxyRequest {
 }
 
 #[derive(Debug)]
-struct AckIndirectRequest {
-    target: Member,
-    sequence_number: u64,
-}
-
-#[derive(Debug)]
 enum Request {
+    // Join cluster.
     Init(SocketAddr),
+    // Direct Ping to another node.
     Ping(Header),
+    // Indirect ping of a node via another node.
     PingIndirect(Header),
+    // Man-in-the-middle Ping - a Ping request from one node to another one this node needs to forward.
     PingProxy(PingProxyRequest),
+    // Confirm Ping.
     Ack(Header),
-    AckIndirect(AckIndirectRequest),
 }
 
 #[derive(Debug)]
@@ -231,24 +229,7 @@ impl SyncNode {
             Request::PingIndirect(_) => self.handle_request_ping_indirect(request).await?,
             Request::PingProxy(_) => self.handle_request_ping_proxy(request).await?,
             Request::Ack(_) => self.handle_request_ack(request).await?,
-            Request::AckIndirect(_) => self.handle_request_ack_indirect(request).await?,
         }
-        Ok(())
-    }
-
-    async fn handle_request_ack_indirect(&mut self, request: Request) -> Result<()> {
-        let ack_indirect = extract_enum!(request, Request::AckIndirect);
-        let message = DisseminationMessageEncoder::new(1024)
-            .message_type(MessageType::PingAck)?
-            .sender(&self.myself)?
-            .sequence_number(ack_indirect.sequence_number)?
-            .encode();
-        self.send_message(OutgoingLetter {
-            message,
-            to: ack_indirect.target.address,
-        })
-        .await
-        .context("Unable to send AckIndirect")?;
         Ok(())
     }
 
@@ -495,12 +476,6 @@ impl SyncNode {
                     }
                     continue;
                 }
-                Request::PingIndirect(ref header) => {
-                    self.update_state(message);
-                    if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
-                        continue;
-                    }
-                }
                 Request::PingProxy(ref ping_proxy) => {
                     if message.sender.id == ping_proxy.target.id
                         && message.sequence_number == ping_proxy.sequence_number
@@ -512,7 +487,7 @@ impl SyncNode {
                         continue;
                     }
                 }
-                Request::Ping(ref header) => {
+                Request::Ping(ref header) | Request::PingIndirect(ref header) => {
                     self.update_state(message);
                     if message.sender.id == header.member_id && message.sequence_number == header.sequence_number {
                         continue;
