@@ -143,10 +143,6 @@ impl SyncNode {
         (gossip, sender)
     }
 
-    pub(crate) fn set_logger(&mut self, logger: slog::Logger) {
-        self.logger = logger.new(slog::o!("id" => self.myself.id.to_string()));
-    }
-
     pub(crate) fn start(&mut self) -> Result<()> {
         let id_value = tracing::field::debug(self.myself.id);
         let runtime = runtime::Builder::new_current_thread().enable_all().build().unwrap();
