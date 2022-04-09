@@ -93,7 +93,6 @@ pub fn create_members(num_members: u8) -> Vec<Node> {
         .iter()
         .map(|a| Node::new(*a, Default::default()))
         .collect::<Vec<_>>();
-    members.iter_mut().for_each(|m| m.set_logger(logger.clone()));
     members
 }
 

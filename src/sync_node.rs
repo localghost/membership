@@ -337,7 +337,6 @@ impl SyncNode {
     }
 
     async fn handle_acks(&mut self) {
-        debug!("Handling acks");
         let now = std::time::Instant::now();
         let ack_timeout = Duration::from_secs(self.config.ack_timeout as u64);
         let (handle, postpone): (Vec<_>, Vec<_>) = self

@@ -11,5 +11,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build
       run: cargo build --verbose
+    - name: Build2
+      run: which cargo
     - name: Run tests
       run: sudo -E cargo test --verbose
