@@ -1,7 +1,5 @@
 use iptables;
 use membership::{Node, ProtocolConfig};
-use sloggers::terminal::TerminalLoggerBuilder;
-use sloggers::Build;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -80,11 +78,6 @@ pub fn create_interfaces(num_interfaces: u8) -> Vec<String> {
 }
 
 pub fn create_members(num_members: u8) -> Vec<Node> {
-    let logger = TerminalLoggerBuilder::new()
-        .level(sloggers::types::Severity::Debug)
-        .build()
-        .unwrap();
-
     let addresses = create_interfaces(num_members)
         .iter()
         .map(|a| SocketAddr::from_str(&format!("{}:2345", a)).unwrap())
@@ -159,8 +152,6 @@ pub fn advance_epochs(num_epochs: u8) {
 }
 
 pub fn block_member(member: &Node) {
-    slog::info!(logger(), "blocking member: {}", member.bind_address().ip().to_string());
-
     let ipt = iptables::new(false).unwrap();
     assert_eq!(
         ipt.append(
@@ -174,12 +165,6 @@ pub fn block_member(member: &Node) {
 }
 
 pub fn unblock_member(member: &Node) {
-    slog::info!(
-        logger(),
-        "unblocking member: {}",
-        member.bind_address().ip().to_string()
-    );
-
     let ipt = iptables::new(false).unwrap();
     assert_eq!(
         ipt.delete(
@@ -190,11 +175,4 @@ pub fn unblock_member(member: &Node) {
         .unwrap(),
         true
     );
-}
-
-fn logger() -> slog::Logger {
-    TerminalLoggerBuilder::new()
-        .level(sloggers::types::Severity::Info)
-        .build()
-        .unwrap()
 }

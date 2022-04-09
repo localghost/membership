@@ -1,6 +1,4 @@
 use membership::{Node, ProtocolConfig};
-use sloggers::terminal::TerminalLoggerBuilder;
-use sloggers::Build;
 use std::net::SocketAddr;
 use structopt::StructOpt;
 use tracing_subscriber;
