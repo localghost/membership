@@ -30,8 +30,8 @@ fn all_members_alive() -> TestResult {
 #[test]
 fn dead_node_discovered() -> TestResult {
     in_namespace(|| -> TestResult {
-        let subscriber = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).finish();
-        tracing::subscriber::set_global_default(subscriber);
+//        let subscriber = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).finish();
+//        tracing::subscriber::set_global_default(subscriber);
         let mut members = create_members(3);
         create_group(&mut members)?;
 
