@@ -109,7 +109,6 @@ pub(crate) struct SyncNode {
     receiver: tokio::sync::mpsc::Receiver<ChannelMessage>,
     acks: Vec<Ack>,
     suspicions: VecDeque<Suspicion>,
-    logger: slog::Logger,
     members: Members,
     msg_sender: Option<tokio::sync::mpsc::Sender<OutgoingLetter>>,
     msg_receiver: Option<tokio::sync::mpsc::Receiver<crate::messenger::IncomingLetter>>,
@@ -133,7 +132,6 @@ impl SyncNode {
             receiver,
             acks: Vec::<Ack>::with_capacity(32),
             suspicions: VecDeque::new(),
-            logger: slog::Logger::root(slog::Discard, slog::o!()),
             members: Members::new(),
             msg_sender: None,
             msg_receiver: None,
@@ -153,6 +151,7 @@ impl SyncNode {
                 self.msg_sender = Some(sender);
                 self.msg_receiver = Some(receiver);
                 self.run().await?;
+                messenger.stop()?;
                 Ok(())
             })
         })
@@ -163,7 +162,7 @@ impl SyncNode {
         let mut protocol_interval = create_interval(self.config.protocol_period, tt::MissedTickBehavior::Burst);
         let mut ack_interval = create_interval(self.config.ack_timeout as u64, tt::MissedTickBehavior::Skip);
         let mut suspicion_interval = create_interval(self.config.suspect_timeout, tt::MissedTickBehavior::Skip);
-        loop {
+        'main: loop {
             tokio::select!(
                 _ = protocol_interval.tick() => {
                     self.advance_epoch().await?
@@ -200,8 +199,7 @@ impl SyncNode {
                             self.acks.push(Ack::new(Request::Init(address)));
                         }
                         ChannelMessage::Stop => {
-                            // TODO: stop the node
-                            todo!()
+                            break 'main;
                         }
                         ChannelMessage::GetMembers(sender) => {
                             let members = std::iter::once(&self.myself.address)
@@ -216,6 +214,7 @@ impl SyncNode {
                 }
             )
         }
+        Ok(())
     }
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
@@ -689,112 +688,7 @@ impl SyncNode {
         self.sequence_number += 1;
         sequence_number
     }
-    //
-    // fn handle_protocol_event(&mut self, event: &Event) -> Result<()> {
-    //     if event.readiness().is_readable() {
-    //         if let Some(letter) = self.recv_letter() {
-    //             match letter.message {
-    //                 IncomingMessage::Ping(m) => self.handle_ping(&m),
-    //                 IncomingMessage::Ack(m) => self.handle_ack(&m),
-    //                 IncomingMessage::PingRequest(m) => self.handle_indirect_ping(&m),
-    //             }
-    //         }
-    //     } else if event.readiness().is_writable() {
-    //         if let Some(request) = self.requests.pop_front() {
-    //             debug!(self.logger, "{:?}", request);
-    //             match request {
-    //                 Request::Init(address) => {
-    //                     let message = DisseminationMessageEncoder::new(1024)
-    //                         .message_type(MessageType::Ping)?
-    //                         .sender(&self.myself)?
-    //                         .sequence_number(0)?
-    //                         .encode();
-    //                     self.send_message(address, message);
-    //                     self.acks.push(Ack::new(request));
-    //                 }
-    //                 Request::Ping(ref header) if self.members.has(&header.member_id) => {
-    //                     let message = DisseminationMessageEncoder::new(1024)
-    //                         .message_type(MessageType::Ping)?
-    //                         .sender(&self.myself)?
-    //                         .sequence_number(header.sequence_number)?
-    //                         .notifications(self.notifications.for_dissemination())?
-    //                         .broadcast(self.members.for_broadcast())?
-    //                         .encode();
-    //                     self.send_message(self.members.get(&header.member_id).unwrap().address, message);
-    //                     self.acks.push(Ack::new(request));
-    //                 }
-    //                 Request::Ping(ref header) => {
-    //                     info!(
-    //                         self.logger,
-    //                         "Dropping Ping message, member {} has already been removed.", header.member_id
-    //                     );
-    //                 }
-    //                 Request::PingIndirect(ref header) if self.members.has(&header.member_id) => {
-    //                     let indirect_members = self
-    //                         .members
-    //                         .iter()
-    //                         .map(|m| m.id)
-    //                         .filter(|key| *key != header.member_id)
-    //                         .take(self.config.num_indirect as usize)
-    //                         .collect::<Vec<_>>();
-    //                     indirect_members.iter().try_for_each(|member_id| -> Result<()> {
-    //                         let message = PingRequestMessageEncoder::new()
-    //                             .sender(&self.myself)?
-    //                             .sequence_number(header.sequence_number)?
-    //                             .target(&self.members.get(&header.member_id).unwrap())?
-    //                             .encode();
-    //                         self.send_message(self.members.get(member_id).unwrap().address, message);
-    //                         Ok(())
-    //                     })?;
-    //                     self.acks.push(Ack::new(request));
-    //                 }
-    //                 Request::PingIndirect(ref header) => {
-    //                     info!(
-    //                         self.logger,
-    //                         "Dropping PingIndirect message, member {} has already been removed.", header.member_id
-    //                     );
-    //                 }
-    //                 Request::PingProxy(ref ping_proxy) => {
-    //                     let message = DisseminationMessageEncoder::new(1024)
-    //                         .message_type(MessageType::Ping)?
-    //                         .sender(&self.myself)?
-    //                         .sequence_number(ping_proxy.sequence_number)?
-    //                         .notifications(self.notifications.for_dissemination())?
-    //                         .broadcast(self.members.for_broadcast())?
-    //                         .encode();
-    //                     self.send_message(ping_proxy.target.address, message);
-    //                     self.acks.push(Ack::new(request));
-    //                 }
-    //                 Request::Ack(header) if self.members.has(&header.member_id) => {
-    //                     let message = DisseminationMessageEncoder::new(1024)
-    //                         .message_type(MessageType::PingAck)?
-    //                         .sender(&self.myself)?
-    //                         .sequence_number(header.sequence_number)?
-    //                         .notifications(self.notifications.for_dissemination())?
-    //                         .broadcast(self.members.for_broadcast())?
-    //                         .encode();
-    //                     self.send_message(self.members.get(&header.member_id).unwrap().address, message);
-    //                 }
-    //                 Request::Ack(header) => {
-    //                     warn!(
-    //                         self.logger,
-    //                         "Trying to send ACK {:?} to a member that has been removed", header
-    //                     );
-    //                 }
-    //                 Request::AckIndirect(ack_indirect) => {
-    //                     let message = DisseminationMessageEncoder::new(1024)
-    //                         .message_type(MessageType::PingAck)?
-    //                         .sender(&self.myself)?
-    //                         .sequence_number(ack_indirect.sequence_number)?
-    //                         .encode();
-    //                     self.send_message(ack_indirect.target.address, message);
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     Ok(())
-    // }
-    //
+
     fn update_state(&mut self, message: &DisseminationMessageIn) {
         self.update_members(std::iter::once(&message.sender).chain(message.broadcast.iter()));
         self.process_notifications(message.notifications.iter());

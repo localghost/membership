@@ -2,11 +2,13 @@ use crate::incoming_message::IncomingMessage;
 use crate::message_decoder::decode_message;
 use crate::message_encoder::OutgoingMessage;
 use crate::result::Result;
+use anyhow::anyhow;
 use std::fmt;
 use std::net::SocketAddr;
 use tokio;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -14,7 +16,7 @@ pub(crate) trait Messenger {
     /// Returns:
     ///  * a `Sender` for passing message to be send. The transport may depend on the message type.
     ///  * a `Receiver` for receiving messages from other peers.
-    fn start(&mut self, address: SocketAddr) -> Result<(Sender<OutgoingLetter>, Receiver<IncomingLetter>)>;
+    fn start(&mut self, address: SocketAddr) -> Result<(mpsc::Sender<OutgoingLetter>, mpsc::Receiver<IncomingLetter>)>;
 
     fn stop(&mut self) -> Result<()>;
 }
@@ -51,27 +53,27 @@ impl fmt::Debug for OutgoingLetter {
 
 pub(crate) struct MessengerImpl {
     handle: Option<JoinHandle<Result<()>>>,
-    stop_sender: Option<mpsc::Sender<()>>,
+    stop_sender: Option<oneshot::Sender<()>>,
 }
 
 struct MessangerContext {}
 
 struct MessangerActor {
-    stop_receiver: mpsc::Receiver<()>,
+    stop_receiver: oneshot::Receiver<()>,
     udp: Option<UdpSocket>,
     address: SocketAddr,
-    egress: Receiver<OutgoingLetter>,
-    ingress: Sender<IncomingLetter>,
+    egress: mpsc::Receiver<OutgoingLetter>,
+    ingress: mpsc::Sender<IncomingLetter>,
     recv_buffer: Vec<u8>,
 }
 
 impl MessangerActor {
     fn new(
         address: SocketAddr,
-        egress: Receiver<OutgoingLetter>,
-        ingress: Sender<IncomingLetter>,
-    ) -> (Self, mpsc::Sender<()>) {
-        let (stop_sender, stop_receiver) = mpsc::channel(1);
+        egress: mpsc::Receiver<OutgoingLetter>,
+        ingress: mpsc::Sender<IncomingLetter>,
+    ) -> (Self, oneshot::Sender<()>) {
+        let (stop_sender, stop_receiver) = oneshot::channel();
         (
             Self {
                 stop_receiver,
@@ -89,7 +91,7 @@ impl MessangerActor {
         self.udp = Some(UdpSocket::bind(self.address).await?);
         loop {
             tokio::select! {
-                _ = self.stop_receiver.recv() => break,
+                _ = &mut self.stop_receiver => break,
                 Some(message) = self.egress.recv() => self.send(message).await,
                 result = self.udp.as_mut().unwrap().recv_from(&mut self.recv_buffer) => {
                     match result {
@@ -141,7 +143,7 @@ impl MessengerImpl {
 }
 
 impl Messenger for MessengerImpl {
-    fn start(&mut self, address: SocketAddr) -> Result<(Sender<OutgoingLetter>, Receiver<IncomingLetter>)> {
+    fn start(&mut self, address: SocketAddr) -> Result<(mpsc::Sender<OutgoingLetter>, mpsc::Receiver<IncomingLetter>)> {
         let (out_sender, out_receiver) = mpsc::channel(1024);
         let (in_sender, in_receiver) = mpsc::channel(1024);
         let (mut actor, stop_sender) = MessangerActor::new(address, out_receiver, in_sender);
@@ -151,6 +153,6 @@ impl Messenger for MessengerImpl {
     }
 
     fn stop(&mut self) -> Result<()> {
-        unimplemented!()
+        self.stop_sender.take().unwrap().send(()).map_err(|e| anyhow!("failed {e:?}"))
     }
 }
