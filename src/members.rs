@@ -68,9 +68,6 @@ impl Members {
         self.get(&target)
     }
 
-    pub(crate) fn has(&self, id: &MemberId) -> bool {
-        self.members.contains_key(id)
-    }
     pub(crate) fn get(&self, id: &MemberId) -> Option<&Member> {
         self.members.get(id)
     }

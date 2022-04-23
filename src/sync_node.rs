@@ -159,7 +159,7 @@ impl SyncNode {
 
     async fn run(&mut self) -> Result<()> {
         debug!("Running the protocol with {:?}", self.config);
-        let mut protocol_interval = create_interval(self.config.protocol_period, tt::MissedTickBehavior::Burst);
+        let mut protocol_interval = create_interval(self.config.protocol_period, tt::MissedTickBehavior::Skip);
         let mut ack_interval = create_interval(self.config.ack_timeout as u64, tt::MissedTickBehavior::Skip);
         let mut suspicion_interval = create_interval(self.config.suspect_timeout, tt::MissedTickBehavior::Skip);
         'main: loop {
@@ -365,6 +365,8 @@ impl SyncNode {
                         break;
                     }
                 }
+                // `suspicions` are ordered by create time. So, exiting the loop when first not
+                // timed out found.
                 None => break,
             }
         }
@@ -570,7 +572,7 @@ impl SyncNode {
             return;
         }
         match self.members.add_or_update(member.clone()) {
-            Ok(_) => info!("Member joined: {:?}", member),
+            Ok(_) => info!("Member updated: {:?}", member),
             Err(e) => warn!("Adding new member failed due to: {}", e),
         }
     }
