@@ -1,3 +1,4 @@
+use tracing::info;
 use membership::{Node, ProtocolConfig};
 use std::net::SocketAddr;
 use structopt::StructOpt;
@@ -43,10 +44,11 @@ impl From<ProtocolOptions> for ProtocolConfig {
 
 fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).finish();
-    tracing::subscriber::set_global_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     let config = Options::from_args();
     let mut membership = Node::new(config.bind_address, ProtocolConfig::from(config.proto_config));
+    info!("Running at: {}", config.bind_address);
     // membership.set_logger(TerminalLoggerBuilder::new().build()?);
     match config.join_address {
         Some(address) => membership.join(address),

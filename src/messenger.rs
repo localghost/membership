@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub(crate) trait Messenger {
     /// Returns:
@@ -100,7 +100,7 @@ impl MessangerActor {
                             match decode_message(&self.recv_buffer[..count]) {
                                 Ok(message) => {
                                     let letter = IncomingLetter { from: sender, message };
-                                    debug!("{:?}", letter);
+                                    trace!("{:?}", letter);
                                     self.ingress.send(letter).await?;
                                 },
                                 Err(e) => {
@@ -119,7 +119,8 @@ impl MessangerActor {
     }
 
     async fn send(&mut self, letter: OutgoingLetter) {
-        debug!("Sending letter {:?}", letter);
+        debug!("Sending to letter {:?}", letter.to);
+        trace!("{:?}", letter);
         match self
             .udp
             .as_mut()
@@ -153,6 +154,10 @@ impl Messenger for MessengerImpl {
     }
 
     fn stop(&mut self) -> Result<()> {
-        self.stop_sender.take().unwrap().send(()).map_err(|e| anyhow!("failed {e:?}"))
+        self.stop_sender
+            .take()
+            .unwrap()
+            .send(())
+            .map_err(|e| anyhow!("failed {e:?}"))
     }
 }

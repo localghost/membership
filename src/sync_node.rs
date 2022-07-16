@@ -383,7 +383,7 @@ impl SyncNode {
             .position(|n| n.is_suspect() && *n.member() == suspicion.member);
         if let Some(position) = position {
             self.notifications.remove(position);
-            self.notifications.add(Notification::Confirm {
+            self.add_notification(Notification::Confirm {
                 member: suspicion.member.clone(),
             });
             self.handle_confirm(&suspicion.member)
@@ -395,6 +395,8 @@ impl SyncNode {
     async fn advance_epoch(&mut self) -> Result<()> {
         self.epoch += 1;
         info!("New epoch: {}", self.epoch);
+        debug!("Members: {:?}", self.members);
+        debug!("Notifications: {:?}", self.notifications);
         if let Some(member) = self.members.next() {
             let member = member.clone();
             let sequence_number = self.get_next_sequence_number();

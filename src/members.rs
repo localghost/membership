@@ -40,6 +40,17 @@ pub(crate) struct Members {
     rng: SmallRng,
 }
 
+impl std::fmt::Debug for Members {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Members")
+            .field("ordered", &self.ordered)
+            .field("broadcast", &self.broadcast)
+            .field("dead", &self.dead)
+            .field("members", &self.members)
+            .finish()
+    }
+}
+
 impl Members {
     pub(crate) fn new() -> Self {
         Self {
