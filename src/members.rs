@@ -119,7 +119,7 @@ impl Members {
         }
     }
 
-    pub(crate) fn for_broadcast(&mut self) -> impl Iterator<Item = &Member> {
+    pub(crate) fn for_dissemination(&mut self) -> impl Iterator<Item = &Member> {
         BroadcastIterator::new(self.broadcast.for_dissemination(), &self.members)
     }
 

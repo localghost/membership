@@ -234,12 +234,12 @@ impl SyncNode {
         let header = extract_enum!(request, Request::Ack);
         match self.members.get(&header.member_id).cloned() {
             Some(member) => {
-                let message = DisseminationMessageEncoder2::new(1024)
+                let message = DisseminationMessageEncoder2::encoder(1024)
                     .message_type(MessageType::PingAck)?
                     .sender(&self.myself)?
                     .sequence_number(header.sequence_number)?
                     .notifications(self.notifications.for_dissemination())?
-                    .broadcast(self.members.for_broadcast())?
+                    .broadcast(self.members.for_dissemination())?
                     .encode();
                 self.send_message(OutgoingLetter {
                     message,
@@ -262,7 +262,7 @@ impl SyncNode {
             .sender(&self.myself)?
             .sequence_number(ping_proxy.sequence_number)?
             .notifications(self.notifications.for_dissemination())?
-            .broadcast(self.members.for_broadcast())?
+            .broadcast(self.members.for_dissemination())?
             .encode();
         self.send_message(OutgoingLetter {
             message,
@@ -323,7 +323,7 @@ impl SyncNode {
                 .sender(&self.myself)?
                 .sequence_number(header.sequence_number)?
                 .notifications(self.notifications.for_dissemination())?
-                .broadcast(self.members.for_broadcast())?
+                .broadcast(self.members.for_dissemination())?
                 .encode();
             self.send_message(OutgoingLetter {
                 to: member.address,
@@ -369,21 +369,9 @@ impl SyncNode {
 
     fn handle_timeout_suspicion(&mut self, suspicion: &Suspicion) {
         debug!("Suspicion timed out: {:?}", suspicion.member);
-        // Check if the `suspicion` is in notifications. Assume that if it is not then
-        // the member has already been moved to a different state and this `suspicion` can be dropped.
-        let position = self
-            .notifications
-            .for_dissemination()
-            .position(|n| n.is_suspect() && *n.member() == suspicion.member);
-        if let Some(position) = position {
-            self.notifications.remove(position);
-            self.add_notification(Notification::Confirm {
-                member: suspicion.member.clone(),
-            });
-            self.handle_confirm(&suspicion.member)
-        } else {
-            debug!("Member {} already removed.", suspicion.member.id);
-        }
+        self.process_notification(&Notification::Confirm {
+            member: suspicion.member.clone(),
+        });
     }
 
     async fn advance_epoch(&mut self) -> Result<()> {
@@ -399,7 +387,7 @@ impl SyncNode {
                 .sender(&self.myself)?
                 .sequence_number(sequence_number)?
                 .notifications(self.notifications.for_dissemination())?
-                .broadcast(self.members.for_broadcast())?
+                .broadcast(self.members.for_dissemination())?
                 .encode();
             self.send_message(OutgoingLetter {
                 to: member.address,
@@ -421,7 +409,7 @@ impl SyncNode {
             .sender(&self.myself)?
             .sequence_number(seqnum)?
             .notifications(self.notifications.for_dissemination())?
-            .broadcast(self.members.for_broadcast())?
+            .broadcast(self.members.for_dissemination())?
             .encode())
     }
 
@@ -578,21 +566,7 @@ impl SyncNode {
             if self.notifications.iter().any(|n| n >= notification) {
                 continue;
             }
-            match notification {
-                Notification::Confirm { ref member } => self.handle_confirm(member),
-                Notification::Alive { ref member } => self.handle_alive(member),
-                Notification::Suspect { ref member } => self.handle_suspect(member),
-            }
-            let obsolete_notifications = self
-                .notifications
-                .iter()
-                .filter(|&n| n < notification)
-                .cloned()
-                .collect::<Vec<_>>();
-            for n in obsolete_notifications {
-                self.remove_notification(&n);
-            }
-            self.add_notification(notification.clone());
+            self.process_notification(notification);
         }
     }
 
@@ -633,7 +607,6 @@ impl SyncNode {
     }
 
     fn handle_confirm(&mut self, member: &Member) {
-        self.remove_suspicion(member);
         match self.members.remove(&member.id) {
             Ok(_) => info!("Member {:?} removed", member),
             Err(e) => warn!("Member {:?} was not removed due to: {}", member, e),
@@ -726,7 +699,7 @@ impl SyncNode {
             .sender(&message.sender)?
             .sequence_number(message.sequence_number)?
             .notifications(self.notifications.for_dissemination())?
-            .broadcast(self.members.for_broadcast())?
+            .broadcast(self.members.for_dissemination())?
             .encode();
         self.send_message(OutgoingLetter {
             to: message.target.address,

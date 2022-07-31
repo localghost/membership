@@ -55,13 +55,20 @@ impl DisseminationMessageEncoder {
     }
 }
 
+type MessageEncoder = FieldEncoder<
+    MessageTypeField,
+    FieldEncoder<
+        SenderField,
+        FieldEncoder<
+            SequenceNumberField,
+            FieldEncoder<NotificationsField, FieldEncoder<BroadcastField, BufferEncoder>>,
+        >,
+    >,
+>;
 pub(crate) struct DisseminationMessageEncoder2 {}
-
 impl DisseminationMessageEncoder2 {
-    pub(crate) fn new(max_size: usize) -> FieldEncoder<MessageTypeField, FieldEncoder<SenderField, FieldEncoder<SequenceNumberField, FieldEncoder<NotificationsField, FieldEncoder<BroadcastField, BufferEncoder>>>>> {
-        FieldEncoder::<MessageTypeField, FieldEncoder<SenderField, FieldEncoder<SequenceNumberField, FieldEncoder<NotificationsField, FieldEncoder<BroadcastField, BufferEncoder>>>>>::from(
-            BytesMut::with_capacity(max_size).limit(max_size),
-        )
+    pub(crate) fn encoder(max_size: usize) -> MessageEncoder {
+        MessageEncoder::from(BytesMut::with_capacity(max_size).limit(max_size))
     }
 }
 
@@ -143,10 +150,7 @@ impl<Next> FieldEncoder<NotificationsField, Next>
 where
     Next: From<Limit<BytesMut>>,
 {
-    pub(crate) fn notifications<'a>(
-        mut self,
-        notifications: impl Iterator<Item = &'a Notification>,
-    ) -> Result<Next> {
+    pub(crate) fn notifications<'a>(mut self, notifications: impl Iterator<Item = &'a Notification>) -> Result<Next> {
         if self.buffer.has_remaining_mut() {
             let count_position = self.buffer.get_ref().len();
             self.buffer.put_u8(0);
