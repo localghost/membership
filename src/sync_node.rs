@@ -1,11 +1,13 @@
-#![deny(missing_docs)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 use crate::disseminated::Disseminated;
 use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingRequestMessageIn};
 use crate::member::{Member, MemberId};
 use crate::members::Members;
 use crate::message::MessageType;
-use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
+use crate::message_encoder::{
+    DisseminationMessageEncoder, DisseminationMessageEncoder2, OutgoingMessage, PingRequestMessageEncoder,
+};
 use crate::messenger::{Messenger, MessengerImpl, OutgoingLetter};
 use crate::notification::Notification;
 use crate::result::Result;
@@ -195,7 +197,7 @@ impl SyncNode {
                             let message = self.create_protocol_message(MessageType::Ping, sequence_number)?;
                             self.send_message(OutgoingLetter { to: address, message })
                                 .await
-                                .context(format!("Failed to contact initial member"))?;
+                                .context("Failed to contact initial member")?;
                             self.acks.push(Ack::new(Request::Init(address)));
                         }
                         ChannelMessage::Stop => {
@@ -232,7 +234,7 @@ impl SyncNode {
         let header = extract_enum!(request, Request::Ack);
         match self.members.get(&header.member_id).cloned() {
             Some(member) => {
-                let message = DisseminationMessageEncoder::new(1024)
+                let message = DisseminationMessageEncoder2::new(1024)
                     .message_type(MessageType::PingAck)?
                     .sender(&self.myself)?
                     .sequence_number(header.sequence_number)?
@@ -354,20 +356,12 @@ impl SyncNode {
 
     fn drain_timeout_suspicions(&mut self) -> Vec<Suspicion> {
         let mut suspicions = Vec::new();
-        loop {
-            match self.suspicions.front() {
-                Some(ref suspicion) => {
-                    if std::time::Instant::now()
-                        > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64))
-                    {
-                        suspicions.push(self.suspicions.pop_front().unwrap());
-                    } else {
-                        break;
-                    }
-                }
-                // `suspicions` are ordered by create time. So, exiting the loop when first not
-                // timed out found.
-                None => break,
+        while let Some(suspicion) = self.suspicions.front() {
+            if std::time::Instant::now() > (suspicion.created + Duration::from_secs(self.config.suspect_timeout as u64))
+            {
+                suspicions.push(self.suspicions.pop_front().unwrap());
+            } else {
+                break;
             }
         }
         suspicions
@@ -412,7 +406,7 @@ impl SyncNode {
                 message,
             })
             .await
-            .context(format!("Failed to send PING"))?;
+            .context("Failed to send PING")?;
             self.acks.push(Ack::new(Request::Ping(Header {
                 member_id: member.id,
                 sequence_number,
@@ -437,7 +431,7 @@ impl SyncNode {
             .unwrap()
             .send(letter)
             .await
-            .context(format!("Failed to send message"))
+            .context("Failed to send message")
     }
 
     async fn ping_indirect(&mut self, target: &Member) -> Result<()> {
@@ -452,7 +446,7 @@ impl SyncNode {
             let message = PingRequestMessageEncoder::new()
                 .sender(&self.myself)?
                 .sequence_number(self.get_next_sequence_number())?
-                .target(&target)?
+                .target(target)?
                 .encode();
             self.send_message(OutgoingLetter {
                 message,
@@ -581,13 +575,13 @@ impl SyncNode {
 
     fn process_notifications<'m>(&mut self, notifications: impl Iterator<Item = &'m Notification>) {
         for notification in notifications {
-            if self.notifications.iter().find(|&n| n >= notification).is_some() {
+            if self.notifications.iter().any(|n| n >= notification) {
                 continue;
             }
             match notification {
-                Notification::Confirm { member } => self.handle_confirm(member),
-                Notification::Alive { member } => self.handle_alive(member),
-                Notification::Suspect { member } => self.handle_suspect(member),
+                Notification::Confirm { ref member } => self.handle_confirm(member),
+                Notification::Alive { ref member } => self.handle_alive(member),
+                Notification::Suspect { ref member } => self.handle_suspect(member),
             }
             let obsolete_notifications = self
                 .notifications
@@ -600,6 +594,24 @@ impl SyncNode {
             }
             self.add_notification(notification.clone());
         }
+    }
+
+    fn process_notification(&mut self, notification: &Notification) {
+        match notification {
+            Notification::Confirm { member } => self.handle_confirm(member),
+            Notification::Alive { member } => self.handle_alive(member),
+            Notification::Suspect { member } => self.handle_suspect(member),
+        }
+        let obsolete_notifications = self
+            .notifications
+            .iter()
+            .filter(|&n| n < notification)
+            .cloned()
+            .collect::<Vec<_>>();
+        for n in obsolete_notifications {
+            self.remove_notification(&n);
+        }
+        self.add_notification(notification.clone());
     }
 
     fn remove_notification(&mut self, notification: &Notification) {

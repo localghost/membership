@@ -55,6 +55,168 @@ impl DisseminationMessageEncoder {
     }
 }
 
+pub(crate) struct DisseminationMessageEncoder2 {}
+
+impl DisseminationMessageEncoder2 {
+    pub(crate) fn new(max_size: usize) -> FieldEncoder<MessageTypeField, FieldEncoder<SenderField, FieldEncoder<SequenceNumberField, FieldEncoder<NotificationsField, FieldEncoder<BroadcastField, BufferEncoder>>>>> {
+        FieldEncoder::<MessageTypeField, FieldEncoder<SenderField, FieldEncoder<SequenceNumberField, FieldEncoder<NotificationsField, FieldEncoder<BroadcastField, BufferEncoder>>>>>::from(
+            BytesMut::with_capacity(max_size).limit(max_size),
+        )
+    }
+}
+
+pub(crate) struct FieldEncoder<Field, Next> {
+    buffer: Limit<BytesMut>,
+    field: PhantomData<Field>,
+    next: PhantomData<Next>,
+}
+
+impl<Field, Next> From<Limit<BytesMut>> for FieldEncoder<Field, Next> {
+    fn from(buffer: Limit<BytesMut>) -> Self {
+        Self {
+            buffer,
+            field: PhantomData,
+            next: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct BufferEncoder {
+    buffer: Limit<BytesMut>,
+}
+
+impl From<Limit<BytesMut>> for BufferEncoder {
+    fn from(buffer: Limit<BytesMut>) -> Self {
+        Self { buffer }
+    }
+}
+
+impl BufferEncoder {
+    pub(crate) fn encode(self) -> OutgoingMessage {
+        OutgoingMessage::PingRequestMessage(PingRequestMessageOut {
+            buffer: self.buffer.into_inner().freeze(),
+        })
+    }
+}
+
+pub(crate) struct MessageTypeField;
+impl<Next> FieldEncoder<MessageTypeField, Next>
+where
+    Next: From<Limit<BytesMut>>,
+{
+    pub(crate) fn message_type(mut self, message_type: MessageType) -> Result<Next> {
+        if self.buffer.remaining_mut() < std::mem::size_of::<i32>() {
+            bail!("Could not encode message type")
+        }
+        self.buffer.put_i32(message_type as i32);
+        Ok(Next::from(self.buffer))
+    }
+}
+
+pub(crate) struct SenderField;
+impl<Next> FieldEncoder<SenderField, Next>
+where
+    Next: From<Limit<BytesMut>>,
+{
+    pub(crate) fn sender(mut self, member: &Member) -> Result<Next> {
+        encode_member(member, &mut self.buffer)?;
+        Ok(Next::from(self.buffer))
+    }
+}
+
+pub(crate) struct SequenceNumberField;
+impl<Next> FieldEncoder<SequenceNumberField, Next>
+where
+    Next: From<Limit<BytesMut>>,
+{
+    pub(crate) fn sequence_number(mut self, sequence_number: u64) -> Result<Next> {
+        if self.buffer.remaining_mut() < size_of_vals!(sequence_number) {
+            bail!("Could not encode sequence number")
+        }
+        self.buffer.put_u64(sequence_number);
+        Ok(Next::from(self.buffer))
+    }
+}
+
+pub(crate) struct NotificationsField;
+impl<Next> FieldEncoder<NotificationsField, Next>
+where
+    Next: From<Limit<BytesMut>>,
+{
+    pub(crate) fn notifications<'a>(
+        mut self,
+        notifications: impl Iterator<Item = &'a Notification>,
+    ) -> Result<Next> {
+        if self.buffer.has_remaining_mut() {
+            let count_position = self.buffer.get_ref().len();
+            self.buffer.put_u8(0);
+            let mut count = 0;
+            for notification in notifications {
+                if Self::size_of_notification(notification) > self.buffer.remaining_mut() {
+                    break;
+                }
+                self.encode_notification(notification)?;
+                count += 1;
+            }
+            self.buffer.get_mut()[count_position] = count;
+        }
+        Ok(Next::from(self.buffer))
+    }
+
+    fn encode_notification(&mut self, notification: &Notification) -> Result<()> {
+        if self.buffer.remaining_mut() < 1 {
+            bail!("Could not encode notification type")
+        }
+        match notification {
+            Notification::Alive { member } => {
+                self.buffer.put_u8(0);
+                encode_member(member, &mut self.buffer)?;
+            }
+            Notification::Suspect { member } => {
+                self.buffer.put_u8(1);
+                encode_member(member, &mut self.buffer)?;
+            }
+            Notification::Confirm { member } => {
+                self.buffer.put_u8(2);
+                encode_member(member, &mut self.buffer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn size_of_notification(notification: &Notification) -> usize {
+        std::mem::size_of::<u8>()
+            + match notification {
+                Notification::Alive { member }
+                | Notification::Suspect { member }
+                | Notification::Confirm { member } => size_of_member(member),
+            }
+    }
+}
+
+pub(crate) struct BroadcastField;
+impl<Next> FieldEncoder<BroadcastField, Next>
+where
+    Next: From<Limit<BytesMut>>,
+{
+    pub(crate) fn broadcast<'a>(mut self, members: impl Iterator<Item = &'a Member>) -> Result<Next> {
+        if self.buffer.has_remaining_mut() {
+            let count_position = self.buffer.get_ref().len();
+            self.buffer.put_u8(0);
+            let mut count = 0;
+            for member in members {
+                if self.buffer.remaining_mut() < size_of_member(member) {
+                    break;
+                }
+                encode_member(member, &mut self.buffer)?;
+                count += 1;
+            }
+            self.buffer.get_mut()[count_position] = count;
+        }
+        Ok(Next::from(self.buffer))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PingRequestMessageOut {
     buffer: Bytes,

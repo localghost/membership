@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 pub(crate) trait Messenger {
     /// Returns:
@@ -158,6 +158,6 @@ impl Messenger for MessengerImpl {
             .take()
             .unwrap()
             .send(())
-            .map_err(|e| anyhow!("failed {e:?}"))
+            .map_err(|e| anyhow!("failed {:?}", e))
     }
 }

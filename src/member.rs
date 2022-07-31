@@ -1,17 +1,16 @@
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use sha1::{Digest, Sha1};
-//use std::cmp::Ordering;
 use std::array::TryFromSliceError;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Incarnation = u64;
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Hash, Eq)]
 pub(crate) struct MemberId([u8; 20]);
 
 impl MemberId {
@@ -50,11 +49,11 @@ impl TryFrom<&[u8]> for MemberId {
     }
 }
 
-impl Hash for MemberId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
+//impl Hash for MemberId {
+//    fn hash<H: Hasher>(&self, state: &mut H) {
+//        self.0.hash(state)
+//    }
+//}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Member {
