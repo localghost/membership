@@ -227,7 +227,7 @@ mod test {
             Member::new(SocketAddr::from_str("127.0.1.1:5432")?),
             Member::new(SocketAddr::from_str("127.0.1.2:5432")?),
         ];
-        let encoded_message = DisseminationMessageEncoder::new(1024)
+        let encoded_message = DisseminationMessageEncoder::encoder(1024)
             .message_type(MessageType::Ping)?
             .sender(&sender)?
             .sequence_number(24)?
@@ -255,7 +255,7 @@ mod test {
 
         let sender = Member::new(SocketAddr::from_str("127.0.0.1:2345")?);
         let target = Member::new(SocketAddr::from_str("127.0.1.1:5432")?);
-        let encoded_message = PingRequestMessageEncoder::new()
+        let encoded_message = PingRequestMessageEncoder::encoder()
             .sender(&sender)?
             .sequence_number(42)?
             .target(&target)?

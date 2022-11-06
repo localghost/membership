@@ -119,6 +119,10 @@ impl Members {
         }
     }
 
+    pub(crate) fn is_dead(&self, id: &MemberId) -> bool {
+        self.dead.contains(id)
+    }
+
     pub(crate) fn for_dissemination(&mut self) -> impl Iterator<Item = &Member> {
         BroadcastIterator::new(self.broadcast.for_dissemination(), &self.members)
     }

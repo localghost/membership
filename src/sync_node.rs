@@ -5,9 +5,7 @@ use crate::incoming_message::{DisseminationMessageIn, IncomingMessage, PingReque
 use crate::member::{Member, MemberId};
 use crate::members::Members;
 use crate::message::MessageType;
-use crate::message_encoder::{
-    DisseminationMessageEncoder, DisseminationMessageEncoder2, OutgoingMessage, PingRequestMessageEncoder,
-};
+use crate::message_encoder::{DisseminationMessageEncoder, OutgoingMessage, PingRequestMessageEncoder};
 use crate::messenger::{Messenger, MessengerImpl, OutgoingLetter};
 use crate::notification::Notification;
 use crate::result::Result;
@@ -123,7 +121,7 @@ impl SyncNode {
         bind_address: SocketAddr,
         config: ProtocolConfig,
     ) -> (SyncNode, tokio::sync::mpsc::Sender<ChannelMessage>) {
-        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let (external_sender, external_receiver) = tokio::sync::mpsc::channel(1);
         let (requests_sender, requests_receiver) = tokio::sync::mpsc::unbounded_channel();
         let gossip = SyncNode {
             config,
@@ -131,7 +129,7 @@ impl SyncNode {
             epoch: 0,
             sequence_number: 0,
             myself: Member::new(bind_address),
-            receiver,
+            receiver: external_receiver,
             acks: Vec::<Ack>::with_capacity(32),
             suspicions: VecDeque::new(),
             members: Members::new(),
@@ -140,7 +138,7 @@ impl SyncNode {
             requests_sender,
             requests_receiver,
         };
-        (gossip, sender)
+        (gossip, external_sender)
     }
 
     pub(crate) fn start(&mut self) -> Result<()> {
@@ -234,7 +232,7 @@ impl SyncNode {
         let header = extract_enum!(request, Request::Ack);
         match self.members.get(&header.member_id).cloned() {
             Some(member) => {
-                let message = DisseminationMessageEncoder2::encoder(1024)
+                let message = DisseminationMessageEncoder::encoder(1024)
                     .message_type(MessageType::PingAck)?
                     .sender(&self.myself)?
                     .sequence_number(header.sequence_number)?
@@ -257,7 +255,7 @@ impl SyncNode {
 
     async fn handle_request_ping_proxy(&mut self, request: Request) -> Result<()> {
         let ping_proxy = extract_enum!(request, Request::PingProxy);
-        let message = DisseminationMessageEncoder::new(1024)
+        let message = DisseminationMessageEncoder::encoder(1024)
             .message_type(MessageType::Ping)?
             .sender(&self.myself)?
             .sequence_number(ping_proxy.sequence_number)?
@@ -286,7 +284,7 @@ impl SyncNode {
                     .cloned()
                     .collect::<Vec<_>>();
                 for member in indirect_members {
-                    let message = PingRequestMessageEncoder::new()
+                    let message = PingRequestMessageEncoder::encoder()
                         .sender(&self.myself)?
                         .sequence_number(self.get_next_sequence_number())?
                         .target(&target)?
@@ -318,7 +316,7 @@ impl SyncNode {
     async fn handle_request_ping(&mut self, request: Request) -> Result<()> {
         let header = extract_enum!(request, Request::Ping);
         if let Some(member) = self.members.get(&header.member_id).cloned() {
-            let message = DisseminationMessageEncoder::new(1024)
+            let message = DisseminationMessageEncoder::encoder(1024)
                 .message_type(MessageType::Ping)?
                 .sender(&self.myself)?
                 .sequence_number(header.sequence_number)?
@@ -349,7 +347,7 @@ impl SyncNode {
         for ack in handle {
             match self.handle_timeout_ack(ack).await {
                 Ok(()) => {}
-                Err(e) => error!("Failed to handled timed out ACK: {}", e),
+                Err(e) => error!("Failed to handle timed out ACK: {}", e),
             }
         }
     }
@@ -382,13 +380,7 @@ impl SyncNode {
         if let Some(member) = self.members.next() {
             let member = member.clone();
             let sequence_number = self.get_next_sequence_number();
-            let message = DisseminationMessageEncoder::new(1024)
-                .message_type(MessageType::Ping)?
-                .sender(&self.myself)?
-                .sequence_number(sequence_number)?
-                .notifications(self.notifications.for_dissemination())?
-                .broadcast(self.members.for_dissemination())?
-                .encode();
+            let message = self.create_protocol_message(MessageType::Ping, sequence_number)?;
             self.send_message(OutgoingLetter {
                 to: member.address,
                 message,
@@ -404,7 +396,7 @@ impl SyncNode {
     }
 
     fn create_protocol_message(&mut self, mtype: MessageType, seqnum: u64) -> Result<OutgoingMessage> {
-        Ok(DisseminationMessageEncoder::new(1024)
+        Ok(DisseminationMessageEncoder::encoder(1024)
             .message_type(mtype)?
             .sender(&self.myself)?
             .sequence_number(seqnum)?
@@ -431,7 +423,7 @@ impl SyncNode {
             .cloned()
             .collect::<Vec<_>>();
         for member in indirect_members {
-            let message = PingRequestMessageEncoder::new()
+            let message = PingRequestMessageEncoder::encoder()
                 .sender(&self.myself)?
                 .sequence_number(self.get_next_sequence_number())?
                 .target(target)?
@@ -585,7 +577,6 @@ impl SyncNode {
         for n in obsolete_notifications {
             self.remove_notification(&n);
         }
-        self.add_notification(notification.clone());
     }
 
     fn remove_notification(&mut self, notification: &Notification) {
@@ -607,10 +598,16 @@ impl SyncNode {
     }
 
     fn handle_confirm(&mut self, member: &Member) {
+        // FIXME: check if this isn't about myself and if so gracefully shutdown or restart
+        if self.members.is_dead(&member.id) {
+            debug!("Member {:?} is already marked as dead", member);
+            return;
+        }
         match self.members.remove(&member.id) {
             Ok(_) => info!("Member {:?} removed", member),
             Err(e) => warn!("Member {:?} was not removed due to: {}", member, e),
         }
+        self.add_notification(Notification::Confirm { member: member.clone() });
     }
 
     fn remove_suspicion(&mut self, member: &Member) {
@@ -622,6 +619,7 @@ impl SyncNode {
     fn handle_alive(&mut self, member: &Member) {
         self.remove_suspicion(member);
         self.update_member(member);
+        self.add_notification(Notification::Alive { member: member.clone() });
     }
 
     fn handle_suspect(&mut self, member: &Member) {
@@ -629,6 +627,7 @@ impl SyncNode {
             self.handle_suspect_myself(member);
         } else {
             self.handle_suspect_other(member);
+            // FIXME: add the suspect notification
             self.update_member(member);
         }
     }
@@ -694,7 +693,7 @@ impl SyncNode {
     }
 
     async fn handle_indirect_ping(&mut self, message: &PingRequestMessageIn) -> Result<()> {
-        let ping_proxy = DisseminationMessageEncoder::new(1024)
+        let ping_proxy = DisseminationMessageEncoder::encoder(1024)
             .message_type(MessageType::Ping)?
             .sender(&message.sender)?
             .sequence_number(message.sequence_number)?

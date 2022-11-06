@@ -119,7 +119,7 @@ impl MessangerActor {
     }
 
     async fn send(&mut self, letter: OutgoingLetter) {
-        debug!("Sending to letter {:?}", letter.to);
+        debug!("Sending letter to {:?}", letter.to);
         trace!("{:?}", letter);
         match self
             .udp
